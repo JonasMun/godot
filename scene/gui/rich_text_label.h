@@ -471,10 +471,11 @@ public:
 
 	VScrollBar *get_v_scroll() { return vscroll; }
 
-	virtual CursorShape get_cursor_shape(const Point2 &p_pos) const;
+	virtual CursorShape get_cursor_shape(const Point2 &p_pos) const override;
 
 	void set_selection_enabled(bool p_enabled);
 	bool is_selection_enabled() const;
+	String get_selected_text();
 	void selection_copy();
 
 	Error parse_bbcode(const String &p_bbcode);
@@ -501,7 +502,7 @@ public:
 	void install_effect(const Variant effect);
 
 	void set_fixed_size_to_width(int p_width);
-	virtual Size2 get_minimum_size() const;
+	virtual Size2 get_minimum_size() const override;
 
 	RichTextLabel();
 	~RichTextLabel();

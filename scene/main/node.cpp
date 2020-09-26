@@ -55,15 +55,13 @@ void Node::_notification(int p_notification) {
 		case NOTIFICATION_PROCESS: {
 			if (get_script_instance()) {
 				Variant time = get_process_delta_time();
-				const Variant *ptr[1] = { &time };
-				get_script_instance()->call_multilevel(SceneStringNames::get_singleton()->_process, ptr, 1);
+				get_script_instance()->call(SceneStringNames::get_singleton()->_process, time);
 			}
 		} break;
 		case NOTIFICATION_PHYSICS_PROCESS: {
 			if (get_script_instance()) {
 				Variant time = get_physics_process_delta_time();
-				const Variant *ptr[1] = { &time };
-				get_script_instance()->call_multilevel(SceneStringNames::get_singleton()->_physics_process, ptr, 1);
+				get_script_instance()->call(SceneStringNames::get_singleton()->_physics_process, time);
 			}
 
 		} break;
@@ -146,7 +144,7 @@ void Node::_notification(int p_notification) {
 					set_physics_process(true);
 				}
 
-				get_script_instance()->call_multilevel_reversed(SceneStringNames::get_singleton()->_ready, nullptr, 0);
+				get_script_instance()->call(SceneStringNames::get_singleton()->_ready);
 			}
 
 		} break;
@@ -216,7 +214,7 @@ void Node::_propagate_enter_tree() {
 	notification(NOTIFICATION_ENTER_TREE);
 
 	if (get_script_instance()) {
-		get_script_instance()->call_multilevel_reversed(SceneStringNames::get_singleton()->_enter_tree, nullptr, 0);
+		get_script_instance()->call(SceneStringNames::get_singleton()->_enter_tree);
 	}
 
 	emit_signal(SceneStringNames::get_singleton()->tree_entered);
@@ -264,7 +262,7 @@ void Node::_propagate_exit_tree() {
 	data.blocked--;
 
 	if (get_script_instance()) {
-		get_script_instance()->call_multilevel(SceneStringNames::get_singleton()->_exit_tree, nullptr, 0);
+		get_script_instance()->call(SceneStringNames::get_singleton()->_exit_tree);
 	}
 	emit_signal(SceneStringNames::get_singleton()->tree_exiting);
 
@@ -1060,7 +1058,7 @@ void Node::_validate_child_name(Node *p_child, bool p_force_human_readable) {
 
 		bool unique = true;
 
-		if (p_child->data.name == StringName() || p_child->data.name.operator String()[0] == '@') {
+		if (p_child->data.name == StringName()) {
 			//new unique name must be assigned
 			unique = false;
 		} else {
@@ -1096,7 +1094,7 @@ String increase_numeric_string(const String &s) {
 		if (!carry) {
 			break;
 		}
-		CharType n = s[i];
+		char32_t n = s[i];
 		if (n == '9') { // keep carry as true: 9 + 1
 			res[i] = '0';
 		} else {
@@ -1157,7 +1155,7 @@ void Node::_generate_serial_child_name(const Node *p_child, StringName &name) co
 	String name_string = name;
 	String nums;
 	for (int i = name_string.length() - 1; i >= 0; i--) {
-		CharType n = name_string[i];
+		char32_t n = name_string[i];
 		if (n >= '0' && n <= '9') {
 			nums = String::chr(name_string[i]) + nums;
 		} else {
@@ -1329,6 +1327,9 @@ int Node::get_child_count() const {
 }
 
 Node *Node::get_child(int p_index) const {
+	if (p_index < 0) {
+		p_index += data.children.size();
+	}
 	ERR_FAIL_INDEX_V(p_index, data.children.size(), nullptr);
 
 	return data.children[p_index];
@@ -2854,11 +2855,12 @@ void Node::_bind_methods() {
 	BIND_CONSTANT(NOTIFICATION_PATH_CHANGED);
 	BIND_CONSTANT(NOTIFICATION_INTERNAL_PROCESS);
 	BIND_CONSTANT(NOTIFICATION_INTERNAL_PHYSICS_PROCESS);
+	BIND_CONSTANT(NOTIFICATION_POST_ENTER_TREE);
 
 	BIND_CONSTANT(NOTIFICATION_WM_MOUSE_ENTER);
 	BIND_CONSTANT(NOTIFICATION_WM_MOUSE_EXIT);
-	BIND_CONSTANT(NOTIFICATION_WM_FOCUS_IN);
-	BIND_CONSTANT(NOTIFICATION_WM_FOCUS_OUT);
+	BIND_CONSTANT(NOTIFICATION_WM_WINDOW_FOCUS_IN);
+	BIND_CONSTANT(NOTIFICATION_WM_WINDOW_FOCUS_OUT);
 	BIND_CONSTANT(NOTIFICATION_WM_CLOSE_REQUEST);
 	BIND_CONSTANT(NOTIFICATION_WM_GO_BACK_REQUEST);
 	BIND_CONSTANT(NOTIFICATION_WM_SIZE_CHANGED);
@@ -2867,8 +2869,10 @@ void Node::_bind_methods() {
 	BIND_CONSTANT(NOTIFICATION_WM_ABOUT);
 	BIND_CONSTANT(NOTIFICATION_CRASH);
 	BIND_CONSTANT(NOTIFICATION_OS_IME_UPDATE);
-	BIND_CONSTANT(NOTIFICATION_APP_RESUMED);
-	BIND_CONSTANT(NOTIFICATION_APP_PAUSED);
+	BIND_CONSTANT(NOTIFICATION_APPLICATION_RESUMED);
+	BIND_CONSTANT(NOTIFICATION_APPLICATION_PAUSED);
+	BIND_CONSTANT(NOTIFICATION_APPLICATION_FOCUS_IN);
+	BIND_CONSTANT(NOTIFICATION_APPLICATION_FOCUS_OUT);
 
 	BIND_ENUM_CONSTANT(PAUSE_MODE_INHERIT);
 	BIND_ENUM_CONSTANT(PAUSE_MODE_STOP);

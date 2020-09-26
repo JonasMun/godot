@@ -34,32 +34,33 @@
 #include "servers/audio_server.h"
 
 class AudioDriverJavaScript : public AudioDriver {
-	float *internal_buffer;
+	float *internal_buffer = nullptr;
 
-	int _driver_id;
-	int buffer_length;
+	int _driver_id = 0;
+	int buffer_length = 0;
 
 public:
+	static bool is_available();
 	void mix_to_js();
 	void process_capture(float sample);
 
 	static AudioDriverJavaScript *singleton;
 
-	virtual const char *get_name() const;
+	const char *get_name() const override;
 
-	virtual Error init();
-	virtual void start();
+	Error init() override;
+	void start() override;
 	void resume();
-	virtual float get_latency();
-	virtual int get_mix_rate() const;
-	virtual SpeakerMode get_speaker_mode() const;
-	virtual void lock();
-	virtual void unlock();
-	virtual void finish();
+	float get_latency() override;
+	int get_mix_rate() const override;
+	SpeakerMode get_speaker_mode() const override;
+	void lock() override;
+	void unlock() override;
+	void finish() override;
 	void finish_async();
 
-	virtual Error capture_start();
-	virtual Error capture_stop();
+	Error capture_start() override;
+	Error capture_stop() override;
 
 	AudioDriverJavaScript();
 };

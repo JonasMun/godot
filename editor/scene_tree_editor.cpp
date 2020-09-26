@@ -33,6 +33,7 @@
 #include "core/message_queue.h"
 #include "core/print_string.h"
 #include "editor/editor_node.h"
+#include "editor/editor_scale.h"
 #include "editor/node_dock.h"
 #include "editor/plugins/animation_player_editor_plugin.h"
 #include "editor/plugins/canvas_item_editor_plugin.h"
@@ -257,27 +258,35 @@ bool SceneTreeEditor::_add_nodes(Node *p_node, TreeItem *p_parent) {
 		int num_connections = p_node->get_persistent_signal_connection_count();
 		int num_groups = p_node->get_persistent_group_count();
 
+		String msg_temp;
+		if (num_connections >= 1) {
+			Array arr;
+			arr.push_back(num_connections);
+			msg_temp += TTRN("Node has one connection.", "Node has {num} connections.", num_connections).format(arr, "{num}");
+			msg_temp += " ";
+		}
+		if (num_groups >= 1) {
+			Array arr;
+			arr.push_back(num_groups);
+			msg_temp += TTRN("Node is in one group.", "Node is in {num} groups.", num_groups).format(arr, "{num}");
+		}
+		if (num_connections >= 1 || num_groups >= 1) {
+			msg_temp += "\n" + TTR("Click to show signals dock.");
+		}
+
+		Ref<Texture2D> icon_temp;
+		auto signal_temp = BUTTON_SIGNALS;
 		if (num_connections >= 1 && num_groups >= 1) {
-			item->add_button(
-					0,
-					get_theme_icon("SignalsAndGroups", "EditorIcons"),
-					BUTTON_SIGNALS,
-					false,
-					vformat(TTR("Node has %s connection(s) and %s group(s).\nClick to show signals dock."), num_connections, num_groups));
+			icon_temp = get_theme_icon("SignalsAndGroups", "EditorIcons");
 		} else if (num_connections >= 1) {
-			item->add_button(
-					0,
-					get_theme_icon("Signals", "EditorIcons"),
-					BUTTON_SIGNALS,
-					false,
-					vformat(TTR("Node has %s connection(s).\nClick to show signals dock."), num_connections));
+			icon_temp = get_theme_icon("Signals", "EditorIcons");
 		} else if (num_groups >= 1) {
-			item->add_button(
-					0,
-					get_theme_icon("Groups", "EditorIcons"),
-					BUTTON_GROUPS,
-					false,
-					vformat(TTR("Node is in %s group(s).\nClick to show groups dock."), num_groups));
+			icon_temp = get_theme_icon("Groups", "EditorIcons");
+			signal_temp = BUTTON_GROUPS;
+		}
+
+		if (num_connections >= 1 || num_groups >= 1) {
+			item->add_button(0, icon_temp, signal_temp, false, msg_temp);
 		}
 	}
 
@@ -768,6 +777,9 @@ void SceneTreeEditor::_renamed() {
 		return;
 	}
 
+	// Trim leading/trailing whitespace to prevent node names from containing accidental whitespace, which would make it more difficult to get the node via `get_node()`.
+	new_name = new_name.strip_edges();
+
 	if (!undo_redo) {
 		n->set_name(new_name);
 		which->set_metadata(0, n->get_path());
@@ -900,6 +912,10 @@ void SceneTreeEditor::_cell_collapsed(Object *p_obj) {
 Variant SceneTreeEditor::get_drag_data_fw(const Point2 &p_point, Control *p_from) {
 	if (!can_rename) {
 		return Variant(); //not editable tree
+	}
+
+	if (tree->get_button_id_at_position(p_point) != -1) {
+		return Variant(); //dragging from button
 	}
 
 	Vector<Node *> selected;
@@ -1072,7 +1088,7 @@ void SceneTreeEditor::drop_data_fw(const Point2 &p_point, const Variant &p_data,
 }
 
 void SceneTreeEditor::_rmb_select(const Vector2 &p_pos) {
-	emit_signal("rmb_pressed", tree->get_global_transform().xform(p_pos));
+	emit_signal("rmb_pressed", tree->get_screen_transform().xform(p_pos));
 }
 
 void SceneTreeEditor::_warning_changed(Node *p_for_node) {
@@ -1189,6 +1205,10 @@ SceneTreeEditor::~SceneTreeEditor() {
 }
 
 /******** DIALOG *********/
+
+void SceneTreeDialog::popup_scenetree_dialog() {
+	popup_centered_clamped(Size2(350, 700) * EDSCALE);
+}
 
 void SceneTreeDialog::_notification(int p_what) {
 	switch (p_what) {

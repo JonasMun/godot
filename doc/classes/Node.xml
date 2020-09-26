@@ -17,7 +17,7 @@
 		[b]Networking with nodes:[/b] After connecting to a server (or making one, see [NetworkedMultiplayerENet]), it is possible to use the built-in RPC (remote procedure call) system to communicate over the network. By calling [method rpc] with a method name, it will be called locally and in all connected peers (peers = clients and the server that accepts connections). To identify which node receives the RPC call, Godot will use its [NodePath] (make sure node names are the same on all peers). Also, take a look at the high-level networking tutorial and corresponding demos.
 	</description>
 	<tutorials>
-		<link>https://docs.godotengine.org/en/latest/getting_started/step_by_step/scenes_and_nodes.html</link>
+		<link title="Scenes and nodes">https://docs.godotengine.org/en/latest/getting_started/step_by_step/scenes_and_nodes.html</link>
 	</tutorials>
 	<methods>
 		<method name="_enter_tree" qualifiers="virtual">
@@ -194,6 +194,7 @@
 				Finds a descendant of this node whose name matches [code]mask[/code] as in [method String.match] (i.e. case-sensitive, but [code]"*"[/code] matches zero or more characters and [code]"?"[/code] matches any single character except [code]"."[/code]).
 				[b]Note:[/b] It does not match against the full path, just against individual node names.
 				If [code]owned[/code] is [code]true[/code], this method only finds nodes whose owner is this node. This is especially important for scenes instantiated through a script, because those scenes don't have an owner.
+				[b]Note:[/b] As this method walks through all the descendants of the node, it is the slowest way to get a reference to another node. Whenever possible, consider using [method get_node] instead. To avoid using [method find_node] too often, consider caching the node reference into a variable.
 			</description>
 		</method>
 		<method name="find_parent" qualifiers="const">
@@ -204,6 +205,7 @@
 			<description>
 				Finds the first parent of the current node whose name matches [code]mask[/code] as in [method String.match] (i.e. case-sensitive, but [code]"*"[/code] matches zero or more characters and [code]"?"[/code] matches any single character except [code]"."[/code]).
 				[b]Note:[/b] It does not match against the full path, just against individual node names.
+				[b]Note:[/b] As this method walks upwards in the scene tree, it can be slow in large, deeply nested scene trees. Whenever possible, consider using [method get_node] instead. To avoid using [method find_parent] too often, consider caching the node reference into a variable.
 			</description>
 		</method>
 		<method name="get_child" qualifiers="const">
@@ -213,6 +215,7 @@
 			</argument>
 			<description>
 				Returns a child node by its index (see [method get_child_count]). This method is often used for iterating all children of a node.
+				Negative indices access the children from the last one.
 				To access a child node via its name, use [method get_node].
 			</description>
 		</method>
@@ -522,7 +525,7 @@
 				    ┠╴Menu
 				    ┃  ┠╴Label
 				    ┃  ┖╴Camera2D
-				    ┖-SplashScreen
+				    ┖╴SplashScreen
 				       ┖╴Camera2D
 				[/codeblock]
 			</description>
@@ -918,6 +921,9 @@
 		<constant name="NOTIFICATION_INTERNAL_PHYSICS_PROCESS" value="26">
 			Notification received every frame when the internal physics process flag is set (see [method set_physics_process_internal]).
 		</constant>
+		<constant name="NOTIFICATION_POST_ENTER_TREE" value="27">
+			Notification received when the node is ready, just before [constant NOTIFICATION_READY] is received. Unlike the latter, it's sent every time the node enters tree, instead of only once.
+		</constant>
 		<constant name="NOTIFICATION_WM_MOUSE_ENTER" value="1002">
 			Notification received from the OS when the mouse enters the game window.
 			Implemented on desktop and web platforms.
@@ -926,13 +932,11 @@
 			Notification received from the OS when the mouse leaves the game window.
 			Implemented on desktop and web platforms.
 		</constant>
-		<constant name="NOTIFICATION_WM_FOCUS_IN" value="1004">
-			Notification received from the OS when the game window is focused.
-			Implemented on all platforms.
+		<constant name="NOTIFICATION_WM_WINDOW_FOCUS_IN" value="1004">
+			Notification received from the OS when the node's parent [Window] is focused. This may be a change of focus between two windows of the same engine instance, or from the OS desktop or a third-party application to a window of the game (in which case [constant NOTIFICATION_APPLICATION_FOCUS_IN] is also emitted).
 		</constant>
-		<constant name="NOTIFICATION_WM_FOCUS_OUT" value="1005">
-			Notification received from the OS when the game window is unfocused.
-			Implemented on all platforms.
+		<constant name="NOTIFICATION_WM_WINDOW_FOCUS_OUT" value="1005">
+			Notification received from the OS when the node's parent [Window] is defocused. This may be a change of focus between two windows of the same engine instance, or from a window of the game to the OS desktop or a third-party application (in which case [constant NOTIFICATION_APPLICATION_FOCUS_OUT] is also emitted).
 		</constant>
 		<constant name="NOTIFICATION_WM_CLOSE_REQUEST" value="1006">
 			Notification received from the OS when a close request is sent (e.g. closing the window with a "Close" button or [kbd]Alt + F4[/kbd]).
@@ -963,13 +967,21 @@
 			Notification received from the OS when an update of the Input Method Engine occurs (e.g. change of IME cursor position or composition string).
 			Specific to the macOS platform.
 		</constant>
-		<constant name="NOTIFICATION_APP_RESUMED" value="2014">
-			Notification received from the OS when the app is resumed.
+		<constant name="NOTIFICATION_APPLICATION_RESUMED" value="2014">
+			Notification received from the OS when the application is resumed.
 			Specific to the Android platform.
 		</constant>
-		<constant name="NOTIFICATION_APP_PAUSED" value="2015">
-			Notification received from the OS when the app is paused.
+		<constant name="NOTIFICATION_APPLICATION_PAUSED" value="2015">
+			Notification received from the OS when the application is paused.
 			Specific to the Android platform.
+		</constant>
+		<constant name="NOTIFICATION_APPLICATION_FOCUS_IN" value="2016">
+			Notification received from the OS when the application is focused, i.e. when changing the focus from the OS desktop or a thirdparty application to any open window of the Godot instance.
+			Implemented on desktop platforms.
+		</constant>
+		<constant name="NOTIFICATION_APPLICATION_FOCUS_OUT" value="2017">
+			Notification received from the OS when the application is defocused, i.e. when changing the focus from any open window of the Godot instance to the OS desktop or a thirdparty application.
+			Implemented on desktop platforms.
 		</constant>
 		<constant name="PAUSE_MODE_INHERIT" value="0" enum="PauseMode">
 			Inherits pause mode from the node's parent. For the root node, it is equivalent to [constant PAUSE_MODE_STOP]. Default.

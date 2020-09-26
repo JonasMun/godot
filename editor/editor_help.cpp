@@ -244,7 +244,7 @@ void EditorHelp::_add_method(const DocData::MethodDoc &p_method, bool p_overview
 		class_desc->push_cell();
 		class_desc->push_align(RichTextLabel::ALIGN_RIGHT);
 	} else {
-		static const CharType prefix[3] = { 0x25CF /* filled circle */, ' ', 0 };
+		static const char32_t prefix[3] = { 0x25CF /* filled circle */, ' ', 0 };
 		class_desc->add_text(String(prefix));
 	}
 
@@ -761,7 +761,7 @@ void EditorHelp::_update_doc() {
 			signal_line[cd.signals[i].name] = class_desc->get_line_count() - 2; //gets overridden if description
 			class_desc->push_font(doc_code_font); // monofont
 			class_desc->push_color(headline_color);
-			static const CharType prefix[3] = { 0x25CF /* filled circle */, ' ', 0 };
+			static const char32_t prefix[3] = { 0x25CF /* filled circle */, ' ', 0 };
 			class_desc->add_text(String(prefix));
 			_add_text(cd.signals[i].name);
 			class_desc->pop();
@@ -876,7 +876,7 @@ void EditorHelp::_update_doc() {
 
 					class_desc->push_font(doc_code_font);
 					class_desc->push_color(headline_color);
-					static const CharType prefix[3] = { 0x25CF /* filled circle */, ' ', 0 };
+					static const char32_t prefix[3] = { 0x25CF /* filled circle */, ' ', 0 };
 					class_desc->add_text(String(prefix));
 					_add_text(enum_list[i].name);
 					class_desc->pop();
@@ -890,7 +890,7 @@ void EditorHelp::_update_doc() {
 					if (enum_list[i].description != "") {
 						class_desc->push_font(doc_font);
 						class_desc->push_color(comment_color);
-						static const CharType dash[6] = { ' ', ' ', 0x2013 /* en dash */, ' ', ' ', 0 };
+						static const char32_t dash[6] = { ' ', ' ', 0x2013 /* en dash */, ' ', ' ', 0 };
 						class_desc->add_text(String(dash));
 						_add_text(DTR(enum_list[i].description));
 						class_desc->pop();
@@ -937,12 +937,12 @@ void EditorHelp::_update_doc() {
 					Vector<float> color = stripped.split_floats(",");
 					if (color.size() >= 3) {
 						class_desc->push_color(Color(color[0], color[1], color[2]));
-						static const CharType prefix[3] = { 0x25CF /* filled circle */, ' ', 0 };
+						static const char32_t prefix[3] = { 0x25CF /* filled circle */, ' ', 0 };
 						class_desc->add_text(String(prefix));
 						class_desc->pop();
 					}
 				} else {
-					static const CharType prefix[3] = { 0x25CF /* filled circle */, ' ', 0 };
+					static const char32_t prefix[3] = { 0x25CF /* filled circle */, ' ', 0 };
 					class_desc->add_text(String(prefix));
 				}
 
@@ -960,7 +960,7 @@ void EditorHelp::_update_doc() {
 				if (constants[i].description != "") {
 					class_desc->push_font(doc_font);
 					class_desc->push_color(comment_color);
-					static const CharType dash[6] = { ' ', ' ', 0x2013 /* en dash */, ' ', ' ', 0 };
+					static const char32_t dash[6] = { ' ', ' ', 0x2013 /* en dash */, ' ', ' ', 0 };
 					class_desc->add_text(String(dash));
 					_add_text(DTR(constants[i].description));
 					class_desc->pop();
@@ -1002,7 +1002,7 @@ void EditorHelp::_update_doc() {
 
 			class_desc->push_cell();
 			class_desc->push_font(doc_code_font);
-			static const CharType prefix[3] = { 0x25CF /* filled circle */, ' ', 0 };
+			static const char32_t prefix[3] = { 0x25CF /* filled circle */, ' ', 0 };
 			class_desc->add_text(String(prefix));
 
 			_add_type(cd.properties[i].type, cd.properties[i].enumeration);
@@ -1251,6 +1251,55 @@ static void _add_text_to_rt(const String &p_bbcode, RichTextLabel *p_rt) {
 	Color kbd_color = accent_color.lerp(property_color, 0.6);
 
 	String bbcode = p_bbcode.dedent().replace("\t", "").replace("\r", "").strip_edges();
+
+	// Select the correct code examples
+	switch ((int)EDITOR_GET("text_editor/help/class_reference_examples")) {
+		case 0: // GDScript
+			bbcode = bbcode.replace("[gdscript]", "[codeblock]");
+			bbcode = bbcode.replace("[/gdscript]", "[/codeblock]");
+
+			for (int pos = bbcode.find("[csharp]"); pos != -1; pos = bbcode.find("[csharp]")) {
+				if (bbcode.find("[/csharp]") == -1) {
+					WARN_PRINT("Unclosed [csharp] block or parse fail in code (search for tag errors)");
+					break;
+				}
+
+				bbcode.erase(pos, bbcode.find("[/csharp]") + 9 - pos);
+				while (bbcode[pos] == '\n') {
+					bbcode.erase(pos, 1);
+				}
+			}
+			break;
+		case 1: // C#
+			bbcode = bbcode.replace("[csharp]", "[codeblock]");
+			bbcode = bbcode.replace("[/csharp]", "[/codeblock]");
+
+			for (int pos = bbcode.find("[gdscript]"); pos != -1; pos = bbcode.find("[gdscript]")) {
+				if (bbcode.find("[/gdscript]") == -1) {
+					WARN_PRINT("Unclosed [gdscript] block or parse fail in code (search for tag errors)");
+					break;
+				}
+
+				bbcode.erase(pos, bbcode.find("[/gdscript]") + 11 - pos);
+				while (bbcode[pos] == '\n') {
+					bbcode.erase(pos, 1);
+				}
+			}
+			break;
+		case 2: // GDScript and C#
+			bbcode = bbcode.replace("[csharp]", "[b]C#:[/b]\n[codeblock]");
+			bbcode = bbcode.replace("[gdscript]", "[b]GDScript:[/b]\n[codeblock]");
+
+			bbcode = bbcode.replace("[/csharp]", "[/codeblock]");
+			bbcode = bbcode.replace("[/gdscript]", "[/codeblock]");
+			break;
+	}
+
+	// Remove codeblocks (they would be printed otherwise)
+	bbcode = bbcode.replace("[codeblocks]\n", "");
+	bbcode = bbcode.replace("\n[/codeblocks]", "");
+	bbcode = bbcode.replace("[codeblocks]", "");
+	bbcode = bbcode.replace("[/codeblocks]", "");
 
 	// remove extra new lines around code blocks
 	bbcode = bbcode.replace("[codeblock]\n", "[codeblock]");

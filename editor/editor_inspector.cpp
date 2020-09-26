@@ -1174,6 +1174,47 @@ void EditorInspectorSection::_notification(int p_what) {
 		if (arrow.is_valid()) {
 			draw_texture(arrow, Point2(Math::round(arrow_margin * EDSCALE), (h - arrow->get_height()) / 2).floor());
 		}
+
+		if (dropping && !vbox->is_visible_in_tree()) {
+			Color accent_color = get_theme_color("accent_color", "Editor");
+			draw_rect(Rect2(Point2(), get_size()), accent_color, false);
+		}
+	}
+
+	if (p_what == NOTIFICATION_DRAG_BEGIN) {
+		Dictionary dd = get_viewport()->gui_get_drag_data();
+
+		// Only allow dropping if the section contains properties which can take the dragged data.
+		bool children_can_drop = false;
+		for (int child_idx = 0; child_idx < vbox->get_child_count(); child_idx++) {
+			Control *editor_property = Object::cast_to<Control>(vbox->get_child(child_idx));
+
+			// Test can_drop_data and can_drop_data_fw, since can_drop_data only works if set up with forwarding or if script attached.
+			if (editor_property && (editor_property->can_drop_data(Point2(), dd) || editor_property->call("can_drop_data_fw", Point2(), dd, this))) {
+				children_can_drop = true;
+				break;
+			}
+		}
+
+		dropping = children_can_drop;
+		update();
+	}
+
+	if (p_what == NOTIFICATION_DRAG_END) {
+		dropping = false;
+		update();
+	}
+
+	if (p_what == NOTIFICATION_MOUSE_ENTER) {
+		if (dropping) {
+			dropping_unfold_timer->start();
+		}
+	}
+
+	if (p_what == NOTIFICATION_MOUSE_EXIT) {
+		if (dropping) {
+			dropping_unfold_timer->stop();
+		}
 	}
 }
 
@@ -1236,14 +1277,11 @@ void EditorInspectorSection::_gui_input(const Ref<InputEvent> &p_event) {
 			return;
 		}
 
-		_test_unfold();
-
-		bool unfold = !object->editor_is_section_unfolded(section);
-		object->editor_set_section_unfold(section, unfold);
-		if (unfold) {
-			vbox->show();
+		bool should_unfold = !object->editor_is_section_unfolded(section);
+		if (should_unfold) {
+			unfold();
 		} else {
-			vbox->hide();
+			fold();
 		}
 	}
 }
@@ -1291,6 +1329,13 @@ EditorInspectorSection::EditorInspectorSection() {
 	foldable = false;
 	vbox = memnew(VBoxContainer);
 	vbox_added = false;
+
+	dropping = false;
+	dropping_unfold_timer = memnew(Timer);
+	dropping_unfold_timer->set_wait_time(0.6);
+	dropping_unfold_timer->set_one_shot(true);
+	add_child(dropping_unfold_timer);
+	dropping_unfold_timer->connect("timeout", callable_mp(this, &EditorInspectorSection::unfold));
 }
 
 EditorInspectorSection::~EditorInspectorSection() {
@@ -1504,9 +1549,9 @@ void EditorInspector::update_tree() {
 	String subgroup_base;
 	VBoxContainer *category_vbox = nullptr;
 
-	List<PropertyInfo>
-			plist;
+	List<PropertyInfo> plist;
 	object->get_property_list(&plist, true);
+	_update_script_class_properties(*object, plist);
 
 	HashMap<String, VBoxContainer *> item_path;
 	Map<VBoxContainer *, EditorInspectorSection *> section_map;
@@ -1572,7 +1617,30 @@ void EditorInspector::update_tree() {
 			category_vbox = nullptr; //reset
 
 			String type = p.name;
-			category->icon = EditorNode::get_singleton()->get_class_icon(type, "Object");
+			if (!ClassDB::class_exists(type) && !ScriptServer::is_global_class(type) && p.hint_string.length() && FileAccess::exists(p.hint_string)) {
+				Ref<Script> s = ResourceLoader::load(p.hint_string, "Script");
+				String base_type;
+				if (s.is_valid()) {
+					base_type = s->get_instance_base_type();
+				}
+				while (s.is_valid()) {
+					StringName name = EditorNode::get_editor_data().script_class_get_name(s->get_path());
+					String icon_path = EditorNode::get_editor_data().script_class_get_icon_path(name);
+					if (name != StringName() && icon_path.length()) {
+						category->icon = ResourceLoader::load(icon_path, "Texture");
+						break;
+					}
+					s = s->get_base_script();
+				}
+				if (category->icon.is_null() && has_theme_icon(base_type, "EditorIcons")) {
+					category->icon = get_theme_icon(base_type, "EditorIcons");
+				}
+			}
+			if (category->icon.is_null()) {
+				if (type != String()) { // Can happen for built-in scripts.
+					category->icon = EditorNode::get_singleton()->get_class_icon(type, "Object");
+				}
+			}
 			category->label = type;
 
 			category->bg_color = get_theme_color("prop_category", "Editor");
@@ -1643,7 +1711,7 @@ void EditorInspector::update_tree() {
 			basename = group + "/" + basename;
 		}
 
-		String name = (basename.find("/") != -1) ? basename.right(basename.find_last("/") + 1) : basename;
+		String name = (basename.find("/") != -1) ? basename.right(basename.rfind("/") + 1) : basename;
 
 		if (capitalize_paths) {
 			int dot = name.find(".");
@@ -1658,7 +1726,7 @@ void EditorInspector::update_tree() {
 			}
 		}
 
-		String path = basename.left(basename.find_last("/"));
+		String path = basename.left(basename.rfind("/"));
 
 		if (use_filter && filter != "") {
 			String cat = path;
@@ -2368,6 +2436,93 @@ String EditorInspector::get_object_class() const {
 
 void EditorInspector::_feature_profile_changed() {
 	update_tree();
+}
+
+void EditorInspector::_update_script_class_properties(const Object &p_object, List<PropertyInfo> &r_list) const {
+	Ref<Script> script = p_object.get_script();
+	if (script.is_null()) {
+		return;
+	}
+
+	List<StringName> classes;
+	Map<StringName, String> paths;
+
+	// NodeC -> NodeB -> NodeA
+	while (script.is_valid()) {
+		String n = EditorNode::get_editor_data().script_class_get_name(script->get_path());
+		if (n.length()) {
+			classes.push_front(n);
+		} else if (script->get_path() != String() && script->get_path().find("::") == -1) {
+			n = script->get_path().get_file();
+			classes.push_front(n);
+		} else {
+			n = TTR("Built-in script");
+			classes.push_front(n);
+		}
+		paths[n] = script->get_path();
+		script = script->get_base_script();
+	}
+
+	if (classes.empty()) {
+		return;
+	}
+
+	// Script Variables -> to insert: NodeC..B..A -> bottom (insert_here)
+	List<PropertyInfo>::Element *script_variables = NULL;
+	List<PropertyInfo>::Element *bottom = NULL;
+	List<PropertyInfo>::Element *insert_here = NULL;
+	for (List<PropertyInfo>::Element *E = r_list.front(); E; E = E->next()) {
+		PropertyInfo &pi = E->get();
+		if (pi.name != "Script Variables") {
+			continue;
+		}
+		script_variables = E;
+		bottom = r_list.insert_after(script_variables, PropertyInfo());
+		insert_here = bottom;
+		break;
+	}
+
+	Set<StringName> added;
+	for (List<StringName>::Element *E = classes.front(); E; E = E->next()) {
+		StringName name = E->get();
+		String path = paths[name];
+		Ref<Script> s;
+		if (path == String()) {
+			// Built-in script. It can't be inherited, so must be the script attached to the object.
+			s = p_object.get_script();
+		} else {
+			s = ResourceLoader::load(path, "Script");
+		}
+		ERR_FAIL_COND(!s->is_valid());
+		List<PropertyInfo> props;
+		s->get_script_property_list(&props);
+
+		// Script Variables -> NodeA -> bottom (insert_here)
+		List<PropertyInfo>::Element *category = r_list.insert_before(insert_here, PropertyInfo(Variant::NIL, name, PROPERTY_HINT_NONE, path, PROPERTY_USAGE_CATEGORY));
+
+		// Script Variables -> NodeA -> A props... -> bottom (insert_here)
+		for (List<PropertyInfo>::Element *P = props.front(); P; P = P->next()) {
+			PropertyInfo &pi = P->get();
+			if (added.has(pi.name)) {
+				continue;
+			}
+			added.insert(pi.name);
+
+			r_list.insert_before(insert_here, pi);
+		}
+
+		// Script Variables -> NodeA (insert_here) -> A props... -> bottom
+		insert_here = category;
+	}
+
+	// NodeC -> C props... -> NodeB..C..
+	r_list.erase(script_variables);
+	List<PropertyInfo>::Element *to_delete = bottom->next();
+	while (to_delete && !(to_delete->get().usage & PROPERTY_USAGE_CATEGORY)) {
+		r_list.erase(to_delete);
+		to_delete = bottom->next();
+	}
+	r_list.erase(bottom);
 }
 
 void EditorInspector::_bind_methods() {

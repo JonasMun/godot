@@ -42,7 +42,7 @@
 #include "editor/editor_settings.h"
 #endif
 #include "scene/main/window.h"
-static bool _is_text_char(CharType c) {
+static bool _is_text_char(char32_t c) {
 	return !is_symbol(c);
 }
 
@@ -51,7 +51,7 @@ void LineEdit::_gui_input(Ref<InputEvent> p_event) {
 
 	if (b.is_valid()) {
 		if (b->is_pressed() && b->get_button_index() == BUTTON_RIGHT && context_menu_enabled) {
-			menu->set_position(get_global_transform().xform(get_local_mouse_position()));
+			menu->set_position(get_screen_transform().xform(get_local_mouse_position()));
 			menu->set_size(Vector2(1, 1));
 			//menu->set_scale(get_global_transform().get_scale());
 			menu->popup();
@@ -118,11 +118,11 @@ void LineEdit::_gui_input(Ref<InputEvent> p_event) {
 			selection.creating = false;
 			selection.doubleclick = false;
 
-			if (DisplayServer::get_singleton()->has_feature(DisplayServer::FEATURE_VIRTUAL_KEYBOARD)) {
+			if (DisplayServer::get_singleton()->has_feature(DisplayServer::FEATURE_VIRTUAL_KEYBOARD) && virtual_keyboard_enabled) {
 				if (selection.enabled) {
-					DisplayServer::get_singleton()->virtual_keyboard_show(text, get_global_rect(), max_length, selection.begin, selection.end);
+					DisplayServer::get_singleton()->virtual_keyboard_show(text, get_global_rect(), false, max_length, selection.begin, selection.end);
 				} else {
-					DisplayServer::get_singleton()->virtual_keyboard_show(text, get_global_rect(), max_length, cursor_pos);
+					DisplayServer::get_singleton()->virtual_keyboard_show(text, get_global_rect(), false, max_length, cursor_pos);
 				}
 			}
 		}
@@ -309,7 +309,7 @@ void LineEdit::_gui_input(Ref<InputEvent> p_event) {
 				case KEY_KP_ENTER:
 				case KEY_ENTER: {
 					emit_signal("text_entered", text);
-					if (DisplayServer::get_singleton()->has_feature(DisplayServer::FEATURE_VIRTUAL_KEYBOARD)) {
+					if (DisplayServer::get_singleton()->has_feature(DisplayServer::FEATURE_VIRTUAL_KEYBOARD) && virtual_keyboard_enabled) {
 						DisplayServer::get_singleton()->virtual_keyboard_hide();
 					}
 
@@ -577,11 +577,11 @@ void LineEdit::_gui_input(Ref<InputEvent> p_event) {
 
 			if (handled) {
 				accept_event();
-			} else if (!k->get_command()) {
+			} else if (!k->get_command() || (k->get_command() && k->get_alt())) {
 				if (k->get_unicode() >= 32 && k->get_keycode() != KEY_DELETE) {
 					if (editable) {
 						selection_delete();
-						CharType ucodestr[2] = { (CharType)k->get_unicode(), 0 };
+						char32_t ucodestr[2] = { (char32_t)k->get_unicode(), 0 };
 						int prev_len = text.length();
 						append_at_cursor(ucodestr);
 						if (text.length() != prev_len) {
@@ -688,18 +688,18 @@ void LineEdit::_notification(int p_what) {
 			update_placeholder_width();
 			update();
 		} break;
-		case NOTIFICATION_WM_FOCUS_IN: {
+		case NOTIFICATION_WM_WINDOW_FOCUS_IN: {
 			window_has_focus = true;
 			draw_caret = true;
 			update();
 		} break;
-		case NOTIFICATION_WM_FOCUS_OUT: {
+		case NOTIFICATION_WM_WINDOW_FOCUS_OUT: {
 			window_has_focus = false;
 			draw_caret = false;
 			update();
 		} break;
 		case NOTIFICATION_DRAW: {
-			if ((!has_focus() && !menu->has_focus()) || !window_has_focus) {
+			if ((!has_focus() && !menu->has_focus() && !caret_force_displayed) || !window_has_focus) {
 				draw_caret = false;
 			}
 
@@ -806,8 +806,8 @@ void LineEdit::_notification(int p_what) {
 								break;
 							}
 
-							CharType cchar = (pass && !text.empty()) ? secret_character[0] : ime_text[ofs];
-							CharType next = (pass && !text.empty()) ? secret_character[0] : ime_text[ofs + 1];
+							char32_t cchar = (pass && !text.empty()) ? secret_character[0] : ime_text[ofs];
+							char32_t next = (pass && !text.empty()) ? secret_character[0] : ime_text[ofs + 1];
 							int im_char_width = font->get_char_size(cchar, next).width;
 
 							if ((x_ofs + im_char_width) > ofs_max) {
@@ -829,8 +829,8 @@ void LineEdit::_notification(int p_what) {
 					}
 				}
 
-				CharType cchar = (pass && !text.empty()) ? secret_character[0] : t[char_ofs];
-				CharType next = (pass && !text.empty()) ? secret_character[0] : t[char_ofs + 1];
+				char32_t cchar = (pass && !text.empty()) ? secret_character[0] : t[char_ofs];
+				char32_t next = (pass && !text.empty()) ? secret_character[0] : t[char_ofs + 1];
 				int char_width = font->get_char_size(cchar, next).width;
 
 				// End of widget, break.
@@ -869,8 +869,8 @@ void LineEdit::_notification(int p_what) {
 							break;
 						}
 
-						CharType cchar = (pass && !text.empty()) ? secret_character[0] : ime_text[ofs];
-						CharType next = (pass && !text.empty()) ? secret_character[0] : ime_text[ofs + 1];
+						char32_t cchar = (pass && !text.empty()) ? secret_character[0] : ime_text[ofs];
+						char32_t next = (pass && !text.empty()) ? secret_character[0] : ime_text[ofs + 1];
 						int im_char_width = font->get_char_size(cchar, next).width;
 
 						if ((x_ofs + im_char_width) > ofs_max) {
@@ -925,10 +925,14 @@ void LineEdit::_notification(int p_what) {
 			}
 		} break;
 		case NOTIFICATION_FOCUS_ENTER: {
-			if (caret_blink_enabled) {
-				caret_blink_timer->start();
-			} else {
-				draw_caret = true;
+			if (!caret_force_displayed) {
+				if (caret_blink_enabled) {
+					if (caret_blink_timer->is_stopped()) {
+						caret_blink_timer->start();
+					}
+				} else {
+					draw_caret = true;
+				}
 			}
 
 			if (get_viewport()->get_window_id() != DisplayServer::INVALID_WINDOW_ID) {
@@ -937,17 +941,17 @@ void LineEdit::_notification(int p_what) {
 				DisplayServer::get_singleton()->window_set_ime_position(get_global_position() + cursor_pos, get_viewport()->get_window_id());
 			}
 
-			if (DisplayServer::get_singleton()->has_feature(DisplayServer::FEATURE_VIRTUAL_KEYBOARD)) {
+			if (DisplayServer::get_singleton()->has_feature(DisplayServer::FEATURE_VIRTUAL_KEYBOARD) && virtual_keyboard_enabled) {
 				if (selection.enabled) {
-					DisplayServer::get_singleton()->virtual_keyboard_show(text, get_global_rect(), max_length, selection.begin, selection.end);
+					DisplayServer::get_singleton()->virtual_keyboard_show(text, get_global_rect(), false, max_length, selection.begin, selection.end);
 				} else {
-					DisplayServer::get_singleton()->virtual_keyboard_show(text, get_global_rect(), max_length, cursor_pos);
+					DisplayServer::get_singleton()->virtual_keyboard_show(text, get_global_rect(), false, max_length, cursor_pos);
 				}
 			}
 
 		} break;
 		case NOTIFICATION_FOCUS_EXIT: {
-			if (caret_blink_enabled) {
+			if (caret_blink_enabled && !caret_force_displayed) {
 				caret_blink_timer->stop();
 			}
 
@@ -958,7 +962,7 @@ void LineEdit::_notification(int p_what) {
 			ime_text = "";
 			ime_selection = Point2();
 
-			if (DisplayServer::get_singleton()->has_feature(DisplayServer::FEATURE_VIRTUAL_KEYBOARD)) {
+			if (DisplayServer::get_singleton()->has_feature(DisplayServer::FEATURE_VIRTUAL_KEYBOARD) && virtual_keyboard_enabled) {
 				DisplayServer::get_singleton()->virtual_keyboard_hide();
 			}
 
@@ -1167,15 +1171,27 @@ bool LineEdit::cursor_get_blink_enabled() const {
 void LineEdit::cursor_set_blink_enabled(const bool p_enabled) {
 	caret_blink_enabled = p_enabled;
 
-	if (has_focus()) {
+	if (has_focus() || caret_force_displayed) {
 		if (p_enabled) {
-			caret_blink_timer->start();
+			if (caret_blink_timer->is_stopped()) {
+				caret_blink_timer->start();
+			}
 		} else {
 			caret_blink_timer->stop();
 		}
 	}
 
 	draw_caret = true;
+}
+
+bool LineEdit::cursor_get_force_displayed() const {
+	return caret_force_displayed;
+}
+
+void LineEdit::cursor_set_force_displayed(const bool p_enabled) {
+	caret_force_displayed = p_enabled;
+	cursor_set_blink_enabled(caret_blink_enabled);
+	update();
 }
 
 float LineEdit::cursor_get_blink_speed() const {
@@ -1200,7 +1216,7 @@ void LineEdit::_reset_caret_blink_timer() {
 
 void LineEdit::_toggle_draw_caret() {
 	draw_caret = !draw_caret;
-	if (is_visible_in_tree() && has_focus() && window_has_focus) {
+	if (is_visible_in_tree() && ((has_focus() && window_has_focus) || caret_force_displayed)) {
 		update();
 	}
 }
@@ -1658,6 +1674,14 @@ bool LineEdit::is_shortcut_keys_enabled() const {
 	return shortcut_keys_enabled;
 }
 
+void LineEdit::set_virtual_keyboard_enabled(bool p_enable) {
+	virtual_keyboard_enabled = p_enable;
+}
+
+bool LineEdit::is_virtual_keyboard_enabled() const {
+	return virtual_keyboard_enabled;
+}
+
 void LineEdit::set_selecting_enabled(bool p_enabled) {
 	selecting_enabled = p_enabled;
 
@@ -1796,6 +1820,8 @@ void LineEdit::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_expand_to_text_length"), &LineEdit::get_expand_to_text_length);
 	ClassDB::bind_method(D_METHOD("cursor_set_blink_enabled", "enabled"), &LineEdit::cursor_set_blink_enabled);
 	ClassDB::bind_method(D_METHOD("cursor_get_blink_enabled"), &LineEdit::cursor_get_blink_enabled);
+	ClassDB::bind_method(D_METHOD("cursor_set_force_displayed", "enabled"), &LineEdit::cursor_set_force_displayed);
+	ClassDB::bind_method(D_METHOD("cursor_get_force_displayed"), &LineEdit::cursor_get_force_displayed);
 	ClassDB::bind_method(D_METHOD("cursor_set_blink_speed", "blink_speed"), &LineEdit::cursor_set_blink_speed);
 	ClassDB::bind_method(D_METHOD("cursor_get_blink_speed"), &LineEdit::cursor_get_blink_speed);
 	ClassDB::bind_method(D_METHOD("set_max_length", "chars"), &LineEdit::set_max_length);
@@ -1813,6 +1839,8 @@ void LineEdit::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_menu"), &LineEdit::get_menu);
 	ClassDB::bind_method(D_METHOD("set_context_menu_enabled", "enable"), &LineEdit::set_context_menu_enabled);
 	ClassDB::bind_method(D_METHOD("is_context_menu_enabled"), &LineEdit::is_context_menu_enabled);
+	ClassDB::bind_method(D_METHOD("set_virtual_keyboard_enabled", "enable"), &LineEdit::set_virtual_keyboard_enabled);
+	ClassDB::bind_method(D_METHOD("is_virtual_keyboard_enabled"), &LineEdit::is_virtual_keyboard_enabled);
 	ClassDB::bind_method(D_METHOD("set_clear_button_enabled", "enable"), &LineEdit::set_clear_button_enabled);
 	ClassDB::bind_method(D_METHOD("is_clear_button_enabled"), &LineEdit::is_clear_button_enabled);
 	ClassDB::bind_method(D_METHOD("set_shortcut_keys_enabled", "enable"), &LineEdit::set_shortcut_keys_enabled);
@@ -1848,6 +1876,7 @@ void LineEdit::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "secret_character"), "set_secret_character", "get_secret_character");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "expand_to_text_length"), "set_expand_to_text_length", "get_expand_to_text_length");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "context_menu_enabled"), "set_context_menu_enabled", "is_context_menu_enabled");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "virtual_keyboard_enabled"), "set_virtual_keyboard_enabled", "is_virtual_keyboard_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "clear_button_enabled"), "set_clear_button_enabled", "is_clear_button_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "shortcut_keys_enabled"), "set_shortcut_keys_enabled", "is_shortcut_keys_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "selecting_enabled"), "set_selecting_enabled", "is_selecting_enabled");
@@ -1859,6 +1888,7 @@ void LineEdit::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "caret_blink"), "cursor_set_blink_enabled", "cursor_get_blink_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "caret_blink_speed", PROPERTY_HINT_RANGE, "0.1,10,0.01"), "cursor_set_blink_speed", "cursor_get_blink_speed");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "caret_position"), "set_cursor_position", "get_cursor_position");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "caret_force_displayed"), "cursor_set_force_displayed", "cursor_get_force_displayed");
 }
 
 LineEdit::LineEdit() {
@@ -1888,6 +1918,7 @@ LineEdit::LineEdit() {
 
 	draw_caret = true;
 	caret_blink_enabled = false;
+	caret_force_displayed = false;
 	caret_blink_timer = memnew(Timer);
 	add_child(caret_blink_timer);
 	caret_blink_timer->set_wait_time(0.65);

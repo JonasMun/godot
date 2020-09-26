@@ -33,7 +33,9 @@
 
 #include "core/io/config_file.h"
 #include "core/undo_redo.h"
+#include "editor/debugger/editor_debugger_node.h"
 #include "editor/editor_inspector.h"
+#include "editor/editor_translation_parser.h"
 #include "editor/import/editor_import_plugin.h"
 #include "editor/import/resource_importer_scene.h"
 #include "editor/script_create_dialog.h"
@@ -71,6 +73,13 @@ public:
 	void edit_resource(const Ref<Resource> &p_resource);
 	void open_scene_from_path(const String &scene_path);
 	void reload_scene_from_path(const String &scene_path);
+
+	void play_main_scene();
+	void play_current_scene();
+	void play_custom_scene(const String &scene_path);
+	void stop_playing_scene();
+	bool is_playing_scene() const;
+	String get_playing_scene() const;
 
 	Node *get_edited_scene_root();
 	Array get_open_scenes() const;
@@ -220,6 +229,9 @@ public:
 	virtual void restore_global_state();
 	virtual void save_global_state();
 
+	void add_translation_parser_plugin(const Ref<EditorTranslationParserPlugin> &p_parser);
+	void remove_translation_parser_plugin(const Ref<EditorTranslationParserPlugin> &p_parser);
+
 	void add_import_plugin(const Ref<EditorImportPlugin> &p_importer);
 	void remove_import_plugin(const Ref<EditorImportPlugin> &p_importer);
 
@@ -237,6 +249,9 @@ public:
 
 	void add_autoload_singleton(const String &p_name, const String &p_path);
 	void remove_autoload_singleton(const String &p_name);
+
+	void add_debugger_plugin(const Ref<Script> &p_script);
+	void remove_debugger_plugin(const Ref<Script> &p_script);
 
 	void enable_plugin();
 	void disable_plugin();

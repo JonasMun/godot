@@ -30,6 +30,7 @@
 
 #include "image.h"
 
+#include "core/error_macros.h"
 #include "core/hash_map.h"
 #include "core/io/image_loader.h"
 #include "core/io/resource_loader.h"
@@ -360,6 +361,82 @@ void Image::get_mipmap_offset_size_and_dimensions(int p_mipmap, int &r_ofs, int 
 	_get_mipmap_offset_and_size(p_mipmap + 1, ofs2, w2, h2);
 	r_ofs = ofs;
 	r_size = ofs2 - ofs;
+}
+
+Image::Image3DValidateError Image::validate_3d_image(Image::Format p_format, int p_width, int p_height, int p_depth, bool p_mipmaps, const Vector<Ref<Image>> &p_images) {
+	int w = p_width;
+	int h = p_height;
+	int d = p_depth;
+
+	int arr_ofs = 0;
+
+	while (true) {
+		for (int i = 0; i < d; i++) {
+			int idx = i + arr_ofs;
+			if (idx >= p_images.size()) {
+				return VALIDATE_3D_ERR_MISSING_IMAGES;
+			}
+			if (p_images[idx].is_null() || p_images[idx]->empty()) {
+				return VALIDATE_3D_ERR_IMAGE_EMPTY;
+			}
+			if (p_images[idx]->get_format() != p_format) {
+				return VALIDATE_3D_ERR_IMAGE_FORMAT_MISMATCH;
+			}
+			if (p_images[idx]->get_width() != w || p_images[idx]->get_height() != h) {
+				return VALIDATE_3D_ERR_IMAGE_SIZE_MISMATCH;
+			}
+			if (p_images[idx]->has_mipmaps()) {
+				return VALIDATE_3D_ERR_IMAGE_HAS_MIPMAPS;
+			}
+		}
+
+		arr_ofs += d;
+
+		if (!p_mipmaps) {
+			break;
+		}
+
+		if (w == 1 && h == 1 && d == 1) {
+			break;
+		}
+
+		w = MAX(1, w >> 1);
+		h = MAX(1, h >> 1);
+		d = MAX(1, d >> 1);
+	}
+
+	if (arr_ofs != p_images.size()) {
+		return VALIDATE_3D_ERR_EXTRA_IMAGES;
+	}
+
+	return VALIDATE_3D_OK;
+}
+
+String Image::get_3d_image_validation_error_text(Image3DValidateError p_error) {
+	switch (p_error) {
+		case VALIDATE_3D_OK: {
+			return TTR("Ok");
+		} break;
+		case VALIDATE_3D_ERR_IMAGE_EMPTY: {
+			return TTR("Empty Image found");
+		} break;
+		case VALIDATE_3D_ERR_MISSING_IMAGES: {
+			return TTR("Missing Images");
+		} break;
+		case VALIDATE_3D_ERR_EXTRA_IMAGES: {
+			return TTR("Too many Images");
+		} break;
+		case VALIDATE_3D_ERR_IMAGE_SIZE_MISMATCH: {
+			return TTR("Image size mismatch");
+		} break;
+		case VALIDATE_3D_ERR_IMAGE_FORMAT_MISMATCH: {
+			return TTR("Image format mismatch");
+		} break;
+		case VALIDATE_3D_ERR_IMAGE_HAS_MIPMAPS: {
+			return TTR("Image has included mipmaps");
+		} break;
+	}
+	return String();
 }
 
 int Image::get_width() const {
@@ -1894,8 +1971,10 @@ Vector<uint8_t> Image::get_data() const {
 }
 
 void Image::create(int p_width, int p_height, bool p_use_mipmaps, Format p_format) {
-	ERR_FAIL_INDEX(p_width - 1, MAX_WIDTH);
-	ERR_FAIL_INDEX(p_height - 1, MAX_HEIGHT);
+	ERR_FAIL_COND_MSG(p_width <= 0, "Image width must be greater than 0.");
+	ERR_FAIL_COND_MSG(p_height <= 0, "Image height must be greater than 0.");
+	ERR_FAIL_COND_MSG(p_width > MAX_WIDTH, "Image width cannot be greater than " + itos(MAX_WIDTH) + ".");
+	ERR_FAIL_COND_MSG(p_height > MAX_HEIGHT, "Image height cannot be greater than " + itos(MAX_HEIGHT) + ".");
 	ERR_FAIL_COND_MSG(p_width * p_height > MAX_PIXELS, "Too many pixels for image, maximum is " + itos(MAX_PIXELS));
 
 	int mm = 0;
@@ -1914,8 +1993,10 @@ void Image::create(int p_width, int p_height, bool p_use_mipmaps, Format p_forma
 }
 
 void Image::create(int p_width, int p_height, bool p_use_mipmaps, Format p_format, const Vector<uint8_t> &p_data) {
-	ERR_FAIL_INDEX(p_width - 1, MAX_WIDTH);
-	ERR_FAIL_INDEX(p_height - 1, MAX_HEIGHT);
+	ERR_FAIL_COND_MSG(p_width <= 0, "Image width must be greater than 0.");
+	ERR_FAIL_COND_MSG(p_height <= 0, "Image height must be greater than 0.");
+	ERR_FAIL_COND_MSG(p_width > MAX_WIDTH, "Image width cannot be greater than " + itos(MAX_WIDTH) + ".");
+	ERR_FAIL_COND_MSG(p_height > MAX_HEIGHT, "Image height cannot be greater than " + itos(MAX_HEIGHT) + ".");
 	ERR_FAIL_COND_MSG(p_width * p_height > MAX_PIXELS, "Too many pixels for image, maximum is " + itos(MAX_PIXELS));
 
 	int mm;
@@ -2629,6 +2710,7 @@ void Image::fill(const Color &c) {
 ImageMemLoadFunc Image::_png_mem_loader_func = nullptr;
 ImageMemLoadFunc Image::_jpg_mem_loader_func = nullptr;
 ImageMemLoadFunc Image::_webp_mem_loader_func = nullptr;
+ImageMemLoadFunc Image::_tga_mem_loader_func = nullptr;
 
 void (*Image::_image_compress_bc_func)(Image *, float, Image::UsedChannels) = nullptr;
 void (*Image::_image_compress_bptc_func)(Image *, float, Image::UsedChannels) = nullptr;
@@ -3058,6 +3140,7 @@ void Image::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("load_png_from_buffer", "buffer"), &Image::load_png_from_buffer);
 	ClassDB::bind_method(D_METHOD("load_jpg_from_buffer", "buffer"), &Image::load_jpg_from_buffer);
 	ClassDB::bind_method(D_METHOD("load_webp_from_buffer", "buffer"), &Image::load_webp_from_buffer);
+	ClassDB::bind_method(D_METHOD("load_tga_from_buffer", "buffer"), &Image::load_tga_from_buffer);
 
 	ADD_PROPERTY(PropertyInfo(Variant::DICTIONARY, "data", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE), "_set_data", "_get_data");
 
@@ -3387,6 +3470,11 @@ Error Image::load_jpg_from_buffer(const Vector<uint8_t> &p_array) {
 
 Error Image::load_webp_from_buffer(const Vector<uint8_t> &p_array) {
 	return _load_from_buffer(p_array, _webp_mem_loader_func);
+}
+
+Error Image::load_tga_from_buffer(const Vector<uint8_t> &p_array) {
+	ERR_FAIL_NULL_V_MSG(_tga_mem_loader_func, ERR_UNAVAILABLE, "TGA module was not installed.");
+	return _load_from_buffer(p_array, _tga_mem_loader_func);
 }
 
 void Image::convert_rg_to_ra_rgba8() {

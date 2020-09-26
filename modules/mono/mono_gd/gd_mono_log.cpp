@@ -55,33 +55,41 @@ static int get_log_level_id(const char *p_log_level) {
 
 	int i = 0;
 	while (valid_log_levels[i]) {
-		if (!strcmp(valid_log_levels[i], p_log_level))
+		if (!strcmp(valid_log_levels[i], p_log_level)) {
 			return i;
+		}
 		i++;
 	}
 
 	return -1;
 }
 
+static String make_text(const char *log_domain, const char *log_level, const char *message) {
+	String text(message);
+	text += " (in domain ";
+	text += log_domain;
+	if (log_level) {
+		text += ", ";
+		text += log_level;
+	}
+	text += ")";
+	return text;
+}
+
 void GDMonoLog::mono_log_callback(const char *log_domain, const char *log_level, const char *message, mono_bool fatal, void *) {
 	FileAccess *f = GDMonoLog::get_singleton()->log_file;
 
 	if (GDMonoLog::get_singleton()->log_level_id >= get_log_level_id(log_level)) {
-		String text(message);
-		text += " (in domain ";
-		text += log_domain;
-		if (log_level) {
-			text += ", ";
-			text += log_level;
-		}
-		text += ")\n";
+		String text = make_text(log_domain, log_level, message);
+		text += "\n";
 
 		f->seek_end();
 		f->store_string(text);
 	}
 
 	if (fatal) {
-		ERR_PRINT("Mono: FATAL ERROR, ABORTING! Logfile: '" + GDMonoLog::get_singleton()->log_file_path + "'.");
+		String text = make_text(log_domain, log_level, message);
+		ERR_PRINT("Mono: FATAL ERROR '" + text + "', ABORTING! Logfile: '" + GDMonoLog::get_singleton()->log_file_path + "'.");
 		// Make sure to flush before aborting
 		f->flush();
 		f->close();
@@ -115,10 +123,12 @@ void GDMonoLog::_delete_old_log_files(const String &p_logs_dir) {
 
 	String current;
 	while ((current = da->get_next()).length()) {
-		if (da->current_is_dir())
+		if (da->current_is_dir()) {
 			continue;
-		if (!current.ends_with(".txt"))
+		}
+		if (!current.ends_with(".txt")) {
 			continue;
+		}
 
 		uint64_t modified_time = FileAccess::get_modified_time(da->get_current_dir().plus_file(current));
 

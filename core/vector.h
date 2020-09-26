@@ -82,7 +82,7 @@ public:
 	_FORCE_INLINE_ bool empty() const { return _cowdata.empty(); }
 
 	_FORCE_INLINE_ T get(int p_index) { return _cowdata.get(p_index); }
-	_FORCE_INLINE_ const T get(int p_index) const { return _cowdata.get(p_index); }
+	_FORCE_INLINE_ const T &get(int p_index) const { return _cowdata.get(p_index); }
 	_FORCE_INLINE_ void set(int p_index, const T &p_elem) { _cowdata.set(p_index, p_elem); }
 	_FORCE_INLINE_ int size() const { return _cowdata.size(); }
 	Error resize(int p_size) { return _cowdata.resize(p_size); }
@@ -91,6 +91,10 @@ public:
 	int find(const T &p_val, int p_from = 0) const { return _cowdata.find(p_val, p_from); }
 
 	void append_array(Vector<T> p_other);
+
+	bool has(const T &p_val) {
+		return find(p_val, 0) != -1;
+	}
 
 	template <class C>
 	void sort_custom() {

@@ -1124,8 +1124,8 @@ void VisualScriptEditor::_update_members() {
 		TreeItem *ti = members->create_item(variables);
 
 		ti->set_text(0, E->get());
-		Variant var = script->get_variable_default_value(E->get());
-		ti->set_suffix(0, "= " + String(var));
+
+		ti->set_suffix(0, "= " + _sanitized_variant_text(E->get()));
 		ti->set_icon(0, type_icons[script->get_variable_info(E->get()).type]);
 
 		ti->set_selectable(0, true);
@@ -1165,6 +1165,18 @@ void VisualScriptEditor::_update_members() {
 	base_type_select->set_icon(Control::get_theme_icon(icon_type, "EditorIcons"));
 
 	updating_members = false;
+}
+
+String VisualScriptEditor::_sanitized_variant_text(const StringName &property_name) {
+	Variant var = script->get_variable_default_value(property_name);
+
+	if (script->get_variable_info(property_name).type != Variant::NIL) {
+		Callable::CallError ce;
+		const Variant *converted = &var;
+		var = Variant::construct(script->get_variable_info(property_name).type, &converted, 1, ce, false);
+	}
+
+	return String(var);
 }
 
 void VisualScriptEditor::_member_selected() {
@@ -2513,6 +2525,8 @@ RES VisualScriptEditor::get_edited_resource() const {
 }
 
 void VisualScriptEditor::set_edited_resource(const RES &p_res) {
+	ERR_FAIL_COND(script.is_valid());
+	ERR_FAIL_COND(p_res.is_null());
 	script = p_res;
 	signal_editor->script = script;
 	signal_editor->undo_redo = undo_redo;
@@ -2533,6 +2547,9 @@ void VisualScriptEditor::set_edited_resource(const RES &p_res) {
 	_update_members();
 }
 
+void VisualScriptEditor::enable_editor() {
+}
+
 Vector<String> VisualScriptEditor::get_functions() {
 	return Vector<String>();
 }
@@ -2546,6 +2563,9 @@ String VisualScriptEditor::get_name() {
 	if (script->get_path().find("local://") == -1 && script->get_path().find("::") == -1) {
 		name = script->get_path().get_file();
 		if (is_unsaved()) {
+			if (script->get_path().empty()) {
+				name = TTR("[unsaved]");
+			}
 			name += "(*)";
 		}
 	} else if (script->get_name() != "") {
@@ -2562,7 +2582,11 @@ Ref<Texture2D> VisualScriptEditor::get_theme_icon() {
 }
 
 bool VisualScriptEditor::is_unsaved() {
-	return script->is_edited() || script->are_subnodes_edited();
+	bool unsaved =
+			script->is_edited() ||
+			script->are_subnodes_edited() ||
+			script->get_path().empty(); // In memory.
+	return unsaved;
 }
 
 Variant VisualScriptEditor::get_edit_state() {
@@ -2670,7 +2694,8 @@ void VisualScriptEditor::reload(bool p_soft) {
 	_update_graph();
 }
 
-void VisualScriptEditor::get_breakpoints(List<int> *p_breakpoints) {
+Array VisualScriptEditor::get_breakpoints() {
+	Array breakpoints;
 	List<StringName> functions;
 	script->get_function_list(&functions);
 	for (List<StringName>::Element *E = functions.front(); E; E = E->next()) {
@@ -2679,10 +2704,11 @@ void VisualScriptEditor::get_breakpoints(List<int> *p_breakpoints) {
 		for (List<int>::Element *F = nodes.front(); F; F = F->next()) {
 			Ref<VisualScriptNode> vsn = script->get_node(E->get(), F->get());
 			if (vsn->is_breakpoint()) {
-				p_breakpoints->push_back(F->get() - 1); //subtract 1 because breakpoints in text start from zero
+				breakpoints.push_back(F->get() - 1); //subtract 1 because breakpoints in text start from zero
 			}
 		}
 	}
+	return breakpoints;
 }
 
 void VisualScriptEditor::add_callback(const String &p_function, PackedStringArray p_args) {
@@ -4660,10 +4686,10 @@ void VisualScriptEditor::_member_option(int p_option) {
 	}
 }
 
-void VisualScriptEditor::add_syntax_highlighter(SyntaxHighlighter *p_highlighter) {
+void VisualScriptEditor::add_syntax_highlighter(Ref<EditorSyntaxHighlighter> p_highlighter) {
 }
 
-void VisualScriptEditor::set_syntax_highlighter(SyntaxHighlighter *p_highlighter) {
+void VisualScriptEditor::set_syntax_highlighter(Ref<EditorSyntaxHighlighter> p_highlighter) {
 }
 
 void VisualScriptEditor::_bind_methods() {
@@ -4686,6 +4712,8 @@ void VisualScriptEditor::_bind_methods() {
 	ClassDB::bind_method("_update_members", &VisualScriptEditor::_update_members);
 
 	ClassDB::bind_method("_generic_search", &VisualScriptEditor::_generic_search);
+
+	ClassDB::bind_method(D_METHOD("add_syntax_highlighter", "highlighter"), &VisualScriptEditor::add_syntax_highlighter);
 }
 
 VisualScriptEditor::VisualScriptEditor() {

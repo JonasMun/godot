@@ -1,6 +1,5 @@
 import os
 import os.path
-import sys
 import subprocess
 
 from SCons.Script import Dir, Environment
@@ -125,7 +124,8 @@ def configure(env, env_mono):
 
     if not mono_prefix and (os.getenv("MONO32_PREFIX") or os.getenv("MONO64_PREFIX")):
         print(
-            "WARNING: The environment variables 'MONO32_PREFIX' and 'MONO64_PREFIX' are deprecated; use the 'mono_prefix' SCons parameter instead"
+            "WARNING: The environment variables 'MONO32_PREFIX' and 'MONO64_PREFIX' are deprecated; use the"
+            " 'mono_prefix' SCons parameter instead"
         )
 
     # Although we don't support building with tools for any platform where we currently use static AOT,
@@ -396,9 +396,8 @@ def configure(env, env_mono):
             mono_root = subprocess.check_output(["pkg-config", "mono-2", "--variable=prefix"]).decode("utf8").strip()
 
         if tools_enabled:
+            # Only supported for editor builds.
             copy_mono_root_files(env, mono_root)
-        else:
-            print("Ignoring option: 'copy_mono_root'; only available for builds with 'tools' enabled.")
 
 
 def make_template_dir(env, mono_root):

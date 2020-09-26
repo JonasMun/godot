@@ -46,24 +46,6 @@
 #include <emscripten.h>
 #include <stdlib.h>
 
-bool OS_JavaScript::has_touchscreen_ui_hint() const {
-	/* clang-format off */
-	return EM_ASM_INT_V(
-		return 'ontouchstart' in window;
-	);
-	/* clang-format on */
-}
-
-// Audio
-
-int OS_JavaScript::get_audio_driver_count() const {
-	return 1;
-}
-
-const char *OS_JavaScript::get_audio_driver_name(int p_driver) const {
-	return "JavaScript";
-}
-
 // Lifecycle
 void OS_JavaScript::initialize() {
 	OS_Unix::initialize_core();
@@ -74,18 +56,12 @@ void OS_JavaScript::initialize() {
 	EngineDebugger::register_uri_handler("ws://", RemoteDebuggerPeerWebSocket::create);
 	EngineDebugger::register_uri_handler("wss://", RemoteDebuggerPeerWebSocket::create);
 #endif
-
-	char locale_ptr[16];
-	/* clang-format off */
-	EM_ASM({
-		stringToUTF8(Module['locale'], $0, 16);
-	}, locale_ptr);
-	/* clang-format on */
-	setenv("LANG", locale_ptr, true);
 }
 
 void OS_JavaScript::resume_audio() {
-	audio_driver_javascript.resume();
+	if (audio_driver_javascript) {
+		audio_driver_javascript->resume();
+	}
 }
 
 void OS_JavaScript::set_main_loop(MainLoop *p_main_loop) {
@@ -96,27 +72,24 @@ MainLoop *OS_JavaScript::get_main_loop() const {
 	return main_loop;
 }
 
-void OS_JavaScript::main_loop_callback() {
-	get_singleton()->main_loop_iterate();
+extern "C" EMSCRIPTEN_KEEPALIVE void _idb_synced() {
+	OS_JavaScript::get_singleton()->idb_is_syncing = false;
 }
 
 bool OS_JavaScript::main_loop_iterate() {
-	if (is_userfs_persistent() && sync_wait_time >= 0) {
-		int64_t current_time = get_ticks_msec();
-		int64_t elapsed_time = current_time - last_sync_check_time;
-		last_sync_check_time = current_time;
-
-		sync_wait_time -= elapsed_time;
-
-		if (sync_wait_time < 0) {
-			/* clang-format off */
-			EM_ASM(
-				FS.syncfs(function(error) {
-					if (error) { err('Failed to save IDB file system: ' + error.message); }
-				});
-			);
-			/* clang-format on */
-		}
+	if (is_userfs_persistent() && idb_needs_sync && !idb_is_syncing) {
+		idb_is_syncing = true;
+		idb_needs_sync = false;
+		/* clang-format off */
+		EM_ASM({
+			FS.syncfs(function(error) {
+				if (error) {
+					err('Failed to save IDB file system: ' + error.message);
+				}
+				ccall("_idb_synced", 'void', [], []);
+			});
+		});
+		/* clang-format on */
 	}
 
 	DisplayServer::get_singleton()->process_events();
@@ -133,11 +106,17 @@ void OS_JavaScript::delete_main_loop() {
 
 void OS_JavaScript::finalize_async() {
 	finalizing = true;
-	audio_driver_javascript.finish_async();
+	if (audio_driver_javascript) {
+		audio_driver_javascript->finish_async();
+	}
 }
 
 void OS_JavaScript::finalize() {
 	delete_main_loop();
+	if (audio_driver_javascript) {
+		memdelete(audio_driver_javascript);
+		audio_driver_javascript = nullptr;
+	}
 }
 
 // Miscellaneous
@@ -201,10 +180,6 @@ String OS_JavaScript::get_name() const {
 	return "HTML5";
 }
 
-bool OS_JavaScript::can_draw() const {
-	return true; // Always?
-}
-
 String OS_JavaScript::get_user_data_dir() const {
 	return "/userfs";
 };
@@ -222,11 +197,17 @@ String OS_JavaScript::get_data_path() const {
 }
 
 void OS_JavaScript::file_access_close_callback(const String &p_file, int p_flags) {
-	OS_JavaScript *os = get_singleton();
-	if (os->is_userfs_persistent() && p_file.begins_with("/userfs") && p_flags & FileAccess::WRITE) {
-		os->last_sync_check_time = OS::get_singleton()->get_ticks_msec();
-		// Wait five seconds in case more files are about to be closed.
-		os->sync_wait_time = 5000;
+	OS_JavaScript *os = OS_JavaScript::get_singleton();
+	if (!(os->is_userfs_persistent() && (p_flags & FileAccess::WRITE))) {
+		return; // FS persistence is not working or we are not writing.
+	}
+	bool is_file_persistent = p_file.begins_with("/userfs");
+#ifdef TOOLS_ENABLED
+	// Hack for editor persistence (can we track).
+	is_file_persistent = is_file_persistent || p_file.begins_with("/home/web_user/");
+#endif
+	if (is_file_persistent) {
+		os->idb_needs_sync = true;
 	}
 }
 
@@ -246,7 +227,10 @@ void OS_JavaScript::initialize_joypads() {
 }
 
 OS_JavaScript::OS_JavaScript() {
-	AudioDriverManager::add_driver(&audio_driver_javascript);
+	if (AudioDriverJavaScript::is_available()) {
+		audio_driver_javascript = memnew(AudioDriverJavaScript);
+		AudioDriverManager::add_driver(audio_driver_javascript);
+	}
 
 	Vector<Logger *> loggers;
 	loggers.push_back(memnew(StdLogger));

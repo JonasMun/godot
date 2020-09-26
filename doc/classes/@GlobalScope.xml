@@ -27,6 +27,9 @@
 		<member name="Engine" type="Engine" setter="" getter="">
 			The [Engine] singleton.
 		</member>
+		<member name="EngineDebugger" type="EngineDebugger" setter="" getter="">
+			The [EngineDebugger] singleton.
+		</member>
 		<member name="Geometry2D" type="Geometry2D" setter="" getter="">
 			The [Geometry2D] singleton.
 		</member>
@@ -353,16 +356,16 @@
 			Right Direction key.
 		</constant>
 		<constant name="KEY_BACK" value="16777280" enum="KeyList">
-			Back key.
+			Media back key. Not to be confused with the Back button on an Android device.
 		</constant>
 		<constant name="KEY_FORWARD" value="16777281" enum="KeyList">
-			Forward key.
+			Media forward key.
 		</constant>
 		<constant name="KEY_STOP" value="16777282" enum="KeyList">
-			Stop key.
+			Media stop key.
 		</constant>
 		<constant name="KEY_REFRESH" value="16777283" enum="KeyList">
-			Refresh key.
+			Media refresh key.
 		</constant>
 		<constant name="KEY_VOLUMEDOWN" value="16777284" enum="KeyList">
 			Volume down key.
@@ -898,7 +901,7 @@
 		<constant name="KEY_MASK_CTRL" value="268435456" enum="KeyModifierMask">
 			Ctrl key mask.
 		</constant>
-		<constant name="KEY_MASK_CMD" value="268435456" enum="KeyModifierMask">
+		<constant name="KEY_MASK_CMD" value="platform-dependent" enum="KeyModifierMask">
 			Command key mask. On macOS, this is equivalent to [constant KEY_MASK_META]. On other platforms, this is equivalent to [constant KEY_MASK_CTRL]. This mask should be preferred to [constant KEY_MASK_META] or [constant KEY_MASK_CTRL] for system shortcuts as it handles all platforms correctly.
 		</constant>
 		<constant name="KEY_MASK_KPAD" value="536870912" enum="KeyModifierMask">

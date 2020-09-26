@@ -29,7 +29,9 @@
 /*************************************************************************/
 
 #include "display_server_windows.h"
+
 #include "core/io/marshalls.h"
+#include "core/math/geometry_2d.h"
 #include "main/main.h"
 #include "os_windows.h"
 #include "scene/resources/texture.h"
@@ -42,7 +44,7 @@ static String format_error_message(DWORD id) {
 	size_t size = FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
 			nullptr, id, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPWSTR)&messageBuffer, 0, nullptr);
 
-	String msg = "Error " + itos(id) + ": " + String(messageBuffer, size);
+	String msg = "Error " + itos(id) + ": " + String::utf16((const char16_t *)messageBuffer, size);
 
 	LocalFree(messageBuffer);
 
@@ -78,7 +80,7 @@ String DisplayServerWindows::get_name() const {
 }
 
 void DisplayServerWindows::alert(const String &p_alert, const String &p_title) {
-	MessageBoxW(nullptr, p_alert.c_str(), p_title.c_str(), MB_OK | MB_ICONEXCLAMATION | MB_TASKMODAL);
+	MessageBoxW(nullptr, (LPCWSTR)(p_alert.utf16().get_data()), (LPCWSTR)(p_title.utf16().get_data()), MB_OK | MB_ICONEXCLAMATION | MB_TASKMODAL);
 }
 
 void DisplayServerWindows::_set_mouse_mode_impl(MouseMode p_mode) {
@@ -170,18 +172,19 @@ void DisplayServerWindows::clipboard_set(const String &p_text) {
 
 	// Convert LF line endings to CRLF in clipboard content
 	// Otherwise, line endings won't be visible when pasted in other software
-	String text = p_text.replace("\n", "\r\n");
+	String text = p_text.replace("\r\n", "\n").replace("\n", "\r\n"); // avoid \r\r\n
 
 	if (!OpenClipboard(windows[last_focused_window].hWnd)) {
 		ERR_FAIL_MSG("Unable to open clipboard.");
 	}
 	EmptyClipboard();
 
-	HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, (text.length() + 1) * sizeof(CharType));
+	Char16String utf16 = text.utf16();
+	HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, (utf16.length() + 1) * sizeof(WCHAR));
 	ERR_FAIL_COND_MSG(mem == nullptr, "Unable to allocate memory for clipboard contents.");
 
 	LPWSTR lptstrCopy = (LPWSTR)GlobalLock(mem);
-	memcpy(lptstrCopy, text.c_str(), (text.length() + 1) * sizeof(CharType));
+	memcpy(lptstrCopy, utf16.get_data(), (utf16.length() + 1) * sizeof(WCHAR));
 	GlobalUnlock(mem);
 
 	SetClipboardData(CF_UNICODETEXT, mem);
@@ -218,7 +221,7 @@ String DisplayServerWindows::clipboard_get() const {
 		if (mem != nullptr) {
 			LPWSTR ptr = (LPWSTR)GlobalLock(mem);
 			if (ptr != nullptr) {
-				ret = String((CharType *)ptr);
+				ret = String::utf16((const char16_t *)ptr);
 				GlobalUnlock(mem);
 			};
 		};
@@ -476,6 +479,7 @@ DisplayServer::WindowID DisplayServerWindows::create_sub_window(WindowMode p_mod
 	_THREAD_SAFE_METHOD_
 
 	WindowID window_id = _create_window(p_mode, p_flags, p_rect);
+	ERR_FAIL_COND_V_MSG(window_id == INVALID_WINDOW_ID, INVALID_WINDOW_ID, "Failed to create sub window.");
 
 	WindowData &wd = windows[window_id];
 
@@ -492,15 +496,21 @@ DisplayServer::WindowID DisplayServerWindows::create_sub_window(WindowMode p_mod
 		wd.no_focus = true;
 	}
 
-	_update_window_style(window_id);
+	return window_id;
+}
 
-	ShowWindow(wd.hWnd, (p_flags & WINDOW_FLAG_NO_FOCUS_BIT) ? SW_SHOWNOACTIVATE : SW_SHOW); // Show The Window
-	if (!(p_flags & WINDOW_FLAG_NO_FOCUS_BIT)) {
+void DisplayServerWindows::show_window(WindowID p_id) {
+	WindowData &wd = windows[p_id];
+
+	if (p_id != MAIN_WINDOW_ID) {
+		_update_window_style(p_id);
+	}
+
+	ShowWindow(wd.hWnd, wd.no_focus ? SW_SHOWNOACTIVATE : SW_SHOW); // Show The Window
+	if (!wd.no_focus) {
 		SetForegroundWindow(wd.hWnd); // Slightly Higher Priority
 		SetFocus(wd.hWnd); // Sets Keyboard Focus To
 	}
-
-	return window_id;
 }
 
 void DisplayServerWindows::delete_sub_window(WindowID p_window) {
@@ -586,7 +596,37 @@ void DisplayServerWindows::window_set_title(const String &p_title, WindowID p_wi
 	_THREAD_SAFE_METHOD_
 
 	ERR_FAIL_COND(!windows.has(p_window));
-	SetWindowTextW(windows[p_window].hWnd, p_title.c_str());
+	SetWindowTextW(windows[p_window].hWnd, (LPCWSTR)(p_title.utf16().get_data()));
+}
+
+void DisplayServerWindows::window_set_mouse_passthrough(const Vector<Vector2> &p_region, WindowID p_window) {
+	_THREAD_SAFE_METHOD_
+
+	ERR_FAIL_COND(!windows.has(p_window));
+	windows[p_window].mpath = p_region;
+	_update_window_mouse_passthrough(p_window);
+}
+
+void DisplayServerWindows::_update_window_mouse_passthrough(WindowID p_window) {
+	if (windows[p_window].mpath.size() == 0) {
+		SetWindowRgn(windows[p_window].hWnd, nullptr, TRUE);
+	} else {
+		POINT *points = (POINT *)memalloc(sizeof(POINT) * windows[p_window].mpath.size());
+		for (int i = 0; i < windows[p_window].mpath.size(); i++) {
+			if (windows[p_window].borderless) {
+				points[i].x = windows[p_window].mpath[i].x;
+				points[i].y = windows[p_window].mpath[i].y;
+			} else {
+				points[i].x = windows[p_window].mpath[i].x + GetSystemMetrics(SM_CXSIZEFRAME);
+				points[i].y = windows[p_window].mpath[i].y + GetSystemMetrics(SM_CYSIZEFRAME) + GetSystemMetrics(SM_CYCAPTION);
+			}
+		}
+
+		HRGN region = CreatePolygonRgn(points, windows[p_window].mpath.size(), ALTERNATE);
+		SetWindowRgn(windows[p_window].hWnd, region, TRUE);
+		DeleteObject(region);
+		memfree(points);
+	}
 }
 
 int DisplayServerWindows::window_get_current_screen(WindowID p_window) const {
@@ -1002,6 +1042,7 @@ void DisplayServerWindows::window_set_flag(WindowFlags p_flag, bool p_enabled, W
 		case WINDOW_FLAG_BORDERLESS: {
 			wd.borderless = p_enabled;
 			_update_window_style(p_window);
+			_update_window_mouse_passthrough(p_window);
 		} break;
 		case WINDOW_FLAG_ALWAYS_ON_TOP: {
 			ERR_FAIL_COND_MSG(wd.transient_parent != INVALID_WINDOW_ID && p_enabled, "Transient windows can't become on top");
@@ -1366,7 +1407,7 @@ void DisplayServerWindows::cursor_set_custom_image(const RES &p_cursor, CursorSh
 	}
 }
 
-bool DisplayServerWindows::get_swap_ok_cancel() {
+bool DisplayServerWindows::get_swap_cancel_ok() {
 	return true;
 }
 
@@ -1416,13 +1457,13 @@ String DisplayServerWindows::keyboard_get_layout_language(int p_index) const {
 	HKL *layouts = (HKL *)memalloc(layout_count * sizeof(HKL));
 	GetKeyboardLayoutList(layout_count, layouts);
 
-	wchar_t buf[LOCALE_NAME_MAX_LENGTH];
-	memset(buf, 0, LOCALE_NAME_MAX_LENGTH * sizeof(wchar_t));
+	WCHAR buf[LOCALE_NAME_MAX_LENGTH];
+	memset(buf, 0, LOCALE_NAME_MAX_LENGTH * sizeof(WCHAR));
 	LCIDToLocaleName(MAKELCID(LOWORD(layouts[p_index]), SORT_DEFAULT), buf, LOCALE_NAME_MAX_LENGTH, 0);
 
 	memfree(layouts);
 
-	return String(buf).substr(0, 2);
+	return String::utf16((const char16_t *)buf).substr(0, 2);
 }
 
 String _get_full_layout_name_from_registry(HKL p_layout) {
@@ -1430,17 +1471,17 @@ String _get_full_layout_name_from_registry(HKL p_layout) {
 	String ret;
 
 	HKEY hkey;
-	wchar_t layout_text[1024];
-	memset(layout_text, 0, 1024 * sizeof(wchar_t));
+	WCHAR layout_text[1024];
+	memset(layout_text, 0, 1024 * sizeof(WCHAR));
 
-	if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, (LPCWSTR)id.c_str(), 0, KEY_QUERY_VALUE, &hkey) != ERROR_SUCCESS) {
+	if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, (LPCWSTR)(id.utf16().get_data()), 0, KEY_QUERY_VALUE, &hkey) != ERROR_SUCCESS) {
 		return ret;
 	}
 
 	DWORD buffer = 1024;
 	DWORD vtype = REG_SZ;
 	if (RegQueryValueExW(hkey, L"Layout Text", NULL, &vtype, (LPBYTE)layout_text, &buffer) == ERROR_SUCCESS) {
-		ret = String(layout_text);
+		ret = String::utf16((const char16_t *)layout_text);
 	}
 	RegCloseKey(hkey);
 	return ret;
@@ -1456,15 +1497,15 @@ String DisplayServerWindows::keyboard_get_layout_name(int p_index) const {
 
 	String ret = _get_full_layout_name_from_registry(layouts[p_index]); // Try reading full name from Windows registry, fallback to locale name if failed (e.g. on Wine).
 	if (ret == String()) {
-		wchar_t buf[LOCALE_NAME_MAX_LENGTH];
-		memset(buf, 0, LOCALE_NAME_MAX_LENGTH * sizeof(wchar_t));
+		WCHAR buf[LOCALE_NAME_MAX_LENGTH];
+		memset(buf, 0, LOCALE_NAME_MAX_LENGTH * sizeof(WCHAR));
 		LCIDToLocaleName(MAKELCID(LOWORD(layouts[p_index]), SORT_DEFAULT), buf, LOCALE_NAME_MAX_LENGTH, 0);
 
-		wchar_t name[1024];
-		memset(name, 0, 1024 * sizeof(wchar_t));
+		WCHAR name[1024];
+		memset(name, 0, 1024 * sizeof(WCHAR));
 		GetLocaleInfoEx(buf, LOCALE_SLOCALIZEDDISPLAYNAME, (LPWSTR)&name, 1024);
 
-		ret = String(name);
+		ret = String::utf16((const char16_t *)name);
 	}
 	memfree(layouts);
 
@@ -1773,12 +1814,20 @@ LRESULT DisplayServerWindows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 	};
 
 	WindowID window_id = INVALID_WINDOW_ID;
+	bool window_created = false;
 
 	for (Map<WindowID, WindowData>::Element *E = windows.front(); E; E = E->next()) {
 		if (E->get().hWnd == hWnd) {
 			window_id = E->key();
+			window_created = true;
 			break;
 		}
+	}
+
+	if (!window_created) {
+		// Window creation in progress.
+		window_id = window_id_counter;
+		ERR_FAIL_COND_V(!windows.has(window_id), 0);
 	}
 
 	switch (uMsg) // Check For Windows Messages
@@ -1790,6 +1839,12 @@ LRESULT DisplayServerWindows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 			// Restore mouse mode
 			_set_mouse_mode_impl(mouse_mode);
 
+			if (!app_focused) {
+				if (OS::get_singleton()->get_main_loop()) {
+					OS::get_singleton()->get_main_loop()->notification(MainLoop::NOTIFICATION_APPLICATION_FOCUS_IN);
+				}
+				app_focused = true;
+			}
 			break;
 		}
 		case WM_KILLFOCUS: {
@@ -1804,6 +1859,19 @@ LRESULT DisplayServerWindows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 				_touch_event(window_id, false, E->get().x, E->get().y, E->key());
 			}
 			touch_state.clear();
+
+			bool self_steal = false;
+			HWND new_hwnd = (HWND)wParam;
+			if (IsWindow(new_hwnd)) {
+				self_steal = true;
+			}
+
+			if (!self_steal) {
+				if (OS::get_singleton()->get_main_loop()) {
+					OS::get_singleton()->get_main_loop()->notification(MainLoop::NOTIFICATION_APPLICATION_FOCUS_OUT);
+				}
+				app_focused = false;
+			}
 
 			break;
 		}
@@ -1998,8 +2066,8 @@ LRESULT DisplayServerWindows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 					Ref<InputEventMouseMotion> mm;
 					mm.instance();
 					mm->set_window_id(window_id);
-					mm->set_control(GetKeyState(VK_CONTROL) != 0);
-					mm->set_shift(GetKeyState(VK_SHIFT) != 0);
+					mm->set_control(GetKeyState(VK_CONTROL) < 0);
+					mm->set_shift(GetKeyState(VK_SHIFT) < 0);
 					mm->set_alt(alt_mem);
 
 					mm->set_pressure(windows[window_id].last_pressure);
@@ -2141,8 +2209,8 @@ LRESULT DisplayServerWindows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 				mm->set_tilt(Vector2((float)pen_info.tiltX / 90, (float)pen_info.tiltY / 90));
 			}
 
-			mm->set_control((wParam & MK_CONTROL) != 0);
-			mm->set_shift((wParam & MK_SHIFT) != 0);
+			mm->set_control(GetKeyState(VK_CONTROL) < 0);
+			mm->set_shift(GetKeyState(VK_SHIFT) < 0);
 			mm->set_alt(alt_mem);
 
 			mm->set_button_mask(last_button_state);
@@ -2493,7 +2561,7 @@ LRESULT DisplayServerWindows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 					windows[window_id].height = window_h;
 
 #if defined(VULKAN_ENABLED)
-					if (rendering_driver == "vulkan") {
+					if ((rendering_driver == "vulkan") && window_created) {
 						context_vulkan->window_resize(window_id, windows[window_id].width, windows[window_id].height);
 					}
 #endif
@@ -2677,7 +2745,7 @@ LRESULT DisplayServerWindows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 		case WM_DROPFILES: {
 			HDROP hDropInfo = (HDROP)wParam;
 			const int buffsize = 4096;
-			wchar_t buf[buffsize];
+			WCHAR buf[buffsize];
 
 			int fcount = DragQueryFileW(hDropInfo, 0xFFFFFFFF, nullptr, 0);
 
@@ -2685,7 +2753,7 @@ LRESULT DisplayServerWindows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
 			for (int i = 0; i < fcount; i++) {
 				DragQueryFileW(hDropInfo, i, buf, buffsize);
-				String file = buf;
+				String file = String::utf16((const char16_t *)buf);
 				files.push_back(file);
 			}
 
@@ -2845,11 +2913,32 @@ DisplayServer::WindowID DisplayServerWindows::_create_window(WindowMode p_mode, 
 	WindowRect.top = p_rect.position.y;
 	WindowRect.bottom = p_rect.position.y + p_rect.size.y;
 
+	if (p_mode == WINDOW_MODE_FULLSCREEN) {
+		int nearest_area = 0;
+		Rect2i screen_rect;
+		for (int i = 0; i < get_screen_count(); i++) {
+			Rect2i r;
+			r.position = screen_get_position(i);
+			r.size = screen_get_size(i);
+			Rect2 inters = r.clip(p_rect);
+			int area = inters.size.width * inters.size.height;
+			if (area >= nearest_area) {
+				screen_rect = r;
+				nearest_area = area;
+			}
+		}
+
+		WindowRect.left = screen_rect.position.x;
+		WindowRect.right = screen_rect.position.x + screen_rect.size.x;
+		WindowRect.top = screen_rect.position.y;
+		WindowRect.bottom = screen_rect.position.y + screen_rect.size.y;
+	}
+
 	AdjustWindowRectEx(&WindowRect, dwStyle, FALSE, dwExStyle);
 
 	WindowID id = window_id_counter;
 	{
-		WindowData wd;
+		WindowData &wd = windows[id];
 
 		wd.hWnd = CreateWindowExW(
 				dwExStyle,
@@ -2864,6 +2953,7 @@ DisplayServer::WindowID DisplayServerWindows::_create_window(WindowMode p_mode, 
 				nullptr, nullptr, hInstance, nullptr);
 		if (!wd.hWnd) {
 			MessageBoxW(nullptr, L"Window Creation Error.", L"ERROR", MB_OK | MB_ICONEXCLAMATION);
+			windows.erase(id);
 			return INVALID_WINDOW_ID;
 		}
 #ifdef VULKAN_ENABLED
@@ -2872,7 +2962,8 @@ DisplayServer::WindowID DisplayServerWindows::_create_window(WindowMode p_mode, 
 			if (context_vulkan->window_create(id, wd.hWnd, hInstance, WindowRect.right - WindowRect.left, WindowRect.bottom - WindowRect.top) == -1) {
 				memdelete(context_vulkan);
 				context_vulkan = nullptr;
-				ERR_FAIL_V(INVALID_WINDOW_ID);
+				windows.erase(id);
+				ERR_FAIL_V_MSG(INVALID_WINDOW_ID, "Failed to create Vulkan Window.");
 			}
 		}
 #endif
@@ -2929,8 +3020,6 @@ DisplayServer::WindowID DisplayServerWindows::_create_window(WindowMode p_mode, 
 		wd.last_pos = p_rect.position;
 		wd.width = p_rect.size.width;
 		wd.height = p_rect.size.height;
-
-		windows[id] = wd;
 
 		window_id_counter++;
 	}
@@ -3062,16 +3151,17 @@ DisplayServerWindows::DisplayServerWindows(const String &p_rendering_driver, Win
 	Point2i window_position(
 			(screen_get_size(0).width - p_resolution.width) / 2,
 			(screen_get_size(0).height - p_resolution.height) / 2);
+
 	WindowID main_window = _create_window(p_mode, 0, Rect2i(window_position, p_resolution));
+	ERR_FAIL_COND_MSG(main_window == INVALID_WINDOW_ID, "Failed to create main window.");
+
 	for (int i = 0; i < WINDOW_FLAG_MAX; i++) {
 		if (p_flags & (1 << i)) {
 			window_set_flag(WindowFlags(i), true, main_window);
 		}
 	}
 
-	ShowWindow(windows[MAIN_WINDOW_ID].hWnd, SW_SHOW); // Show The Window
-	SetForegroundWindow(windows[MAIN_WINDOW_ID].hWnd); // Slightly Higher Priority
-	SetFocus(windows[MAIN_WINDOW_ID].hWnd); // Sets Keyboard Focus To
+	show_window(MAIN_WINDOW_ID);
 
 #if defined(VULKAN_ENABLED)
 
@@ -3126,7 +3216,13 @@ Vector<String> DisplayServerWindows::get_rendering_drivers_func() {
 }
 
 DisplayServer *DisplayServerWindows::create_func(const String &p_rendering_driver, WindowMode p_mode, uint32_t p_flags, const Vector2i &p_resolution, Error &r_error) {
-	return memnew(DisplayServerWindows(p_rendering_driver, p_mode, p_flags, p_resolution, r_error));
+	DisplayServer *ds = memnew(DisplayServerWindows(p_rendering_driver, p_mode, p_flags, p_resolution, r_error));
+	if (r_error != OK) {
+		ds->alert("Your video card driver does not support any of the supported Vulkan versions.\n"
+				  "Please update your drivers or if you have a very old or integrated GPU upgrade it.",
+				"Unable to initialize Video driver");
+	}
+	return ds;
 }
 
 void DisplayServerWindows::register_windows_driver() {

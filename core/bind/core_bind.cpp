@@ -31,6 +31,7 @@
 #include "core_bind.h"
 
 #include "core/crypto/crypto_core.h"
+#include "core/debugger/engine_debugger.h"
 #include "core/io/file_access_compressed.h"
 #include "core/io/file_access_encrypted.h"
 #include "core/io/json.h"
@@ -454,7 +455,7 @@ Dictionary _OS::get_datetime_from_unix_time(int64_t unix_time_val) const {
 	} else {
 		dayno = (unix_time_val - SECS_DAY + 1) / SECS_DAY;
 		dayclock = unix_time_val - dayno * SECS_DAY;
-		date.weekday = static_cast<OS::Weekday>((dayno - 3) % 7 + 7);
+		date.weekday = static_cast<OS::Weekday>(((dayno % 7) + 11) % 7);
 		do {
 			year--;
 			dayno += YEARSIZE(year);
@@ -781,6 +782,7 @@ void _OS::_bind_methods() {
 
 	// Those default values need to be specified for the docs generator,
 	// to avoid using values from the documentation writer's own OS instance.
+	ADD_PROPERTY_DEFAULT("tablet_driver", "");
 	ADD_PROPERTY_DEFAULT("exit_code", 0);
 	ADD_PROPERTY_DEFAULT("low_processor_usage_mode", false);
 	ADD_PROPERTY_DEFAULT("low_processor_usage_mode_sleep_usec", 6900);
@@ -1619,12 +1621,17 @@ Error _Directory::open(const String &p_path) {
 		memdelete(d);
 	}
 	d = alt;
+	dir_open = true;
 
 	return OK;
 }
 
+bool _Directory::is_open() const {
+	return d && dir_open;
+}
+
 Error _Directory::list_dir_begin(bool p_skip_navigational, bool p_skip_hidden) {
-	ERR_FAIL_COND_V_MSG(!d, ERR_UNCONFIGURED, "Directory must be opened before use.");
+	ERR_FAIL_COND_V_MSG(!is_open(), ERR_UNCONFIGURED, "Directory must be opened before use.");
 
 	_list_skip_navigational = p_skip_navigational;
 	_list_skip_hidden = p_skip_hidden;
@@ -1633,7 +1640,7 @@ Error _Directory::list_dir_begin(bool p_skip_navigational, bool p_skip_hidden) {
 }
 
 String _Directory::get_next() {
-	ERR_FAIL_COND_V_MSG(!d, "", "Directory must be opened before use.");
+	ERR_FAIL_COND_V_MSG(!is_open(), "", "Directory must be opened before use.");
 
 	String next = d->get_next();
 	while (next != "" && ((_list_skip_navigational && (next == "." || next == "..")) || (_list_skip_hidden && d->current_is_hidden()))) {
@@ -1643,42 +1650,49 @@ String _Directory::get_next() {
 }
 
 bool _Directory::current_is_dir() const {
-	ERR_FAIL_COND_V_MSG(!d, false, "Directory must be opened before use.");
+	ERR_FAIL_COND_V_MSG(!is_open(), false, "Directory must be opened before use.");
 	return d->current_is_dir();
 }
 
 void _Directory::list_dir_end() {
-	ERR_FAIL_COND_MSG(!d, "Directory must be opened before use.");
+	ERR_FAIL_COND_MSG(!is_open(), "Directory must be opened before use.");
 	d->list_dir_end();
 }
 
 int _Directory::get_drive_count() {
-	ERR_FAIL_COND_V_MSG(!d, 0, "Directory must be opened before use.");
+	ERR_FAIL_COND_V_MSG(!is_open(), 0, "Directory must be opened before use.");
 	return d->get_drive_count();
 }
 
 String _Directory::get_drive(int p_drive) {
-	ERR_FAIL_COND_V_MSG(!d, "", "Directory must be opened before use.");
+	ERR_FAIL_COND_V_MSG(!is_open(), "", "Directory must be opened before use.");
 	return d->get_drive(p_drive);
 }
 
 int _Directory::get_current_drive() {
-	ERR_FAIL_COND_V_MSG(!d, 0, "Directory must be opened before use.");
+	ERR_FAIL_COND_V_MSG(!is_open(), 0, "Directory must be opened before use.");
 	return d->get_current_drive();
 }
 
 Error _Directory::change_dir(String p_dir) {
-	ERR_FAIL_COND_V_MSG(!d, ERR_UNCONFIGURED, "Directory must be opened before use.");
-	return d->change_dir(p_dir);
+	ERR_FAIL_COND_V_MSG(!d, ERR_UNCONFIGURED, "Directory is not configured properly.");
+	Error err = d->change_dir(p_dir);
+
+	if (err != OK) {
+		return err;
+	}
+	dir_open = true;
+
+	return OK;
 }
 
 String _Directory::get_current_dir() {
-	ERR_FAIL_COND_V_MSG(!d, "", "Directory must be opened before use.");
+	ERR_FAIL_COND_V_MSG(!is_open(), "", "Directory must be opened before use.");
 	return d->get_current_dir();
 }
 
 Error _Directory::make_dir(String p_dir) {
-	ERR_FAIL_COND_V_MSG(!d, ERR_UNCONFIGURED, "Directory must be opened before use.");
+	ERR_FAIL_COND_V_MSG(!d, ERR_UNCONFIGURED, "Directory is not configured properly.");
 	if (!p_dir.is_rel_path()) {
 		DirAccess *d = DirAccess::create_for_path(p_dir);
 		Error err = d->make_dir(p_dir);
@@ -1689,7 +1703,7 @@ Error _Directory::make_dir(String p_dir) {
 }
 
 Error _Directory::make_dir_recursive(String p_dir) {
-	ERR_FAIL_COND_V_MSG(!d, ERR_UNCONFIGURED, "Directory must be opened before use.");
+	ERR_FAIL_COND_V_MSG(!d, ERR_UNCONFIGURED, "Directory is not configured properly.");
 	if (!p_dir.is_rel_path()) {
 		DirAccess *d = DirAccess::create_for_path(p_dir);
 		Error err = d->make_dir_recursive(p_dir);
@@ -1700,8 +1714,7 @@ Error _Directory::make_dir_recursive(String p_dir) {
 }
 
 bool _Directory::file_exists(String p_file) {
-	ERR_FAIL_COND_V_MSG(!d, false, "Directory must be opened before use.");
-
+	ERR_FAIL_COND_V_MSG(!d, false, "Directory is not configured properly.");
 	if (!p_file.is_rel_path()) {
 		return FileAccess::exists(p_file);
 	}
@@ -1710,30 +1723,29 @@ bool _Directory::file_exists(String p_file) {
 }
 
 bool _Directory::dir_exists(String p_dir) {
-	ERR_FAIL_COND_V_MSG(!d, false, "Directory must be opened before use.");
+	ERR_FAIL_COND_V_MSG(!d, false, "Directory is not configured properly.");
 	if (!p_dir.is_rel_path()) {
 		DirAccess *d = DirAccess::create_for_path(p_dir);
 		bool exists = d->dir_exists(p_dir);
 		memdelete(d);
 		return exists;
-
-	} else {
-		return d->dir_exists(p_dir);
 	}
+
+	return d->dir_exists(p_dir);
 }
 
 int _Directory::get_space_left() {
-	ERR_FAIL_COND_V_MSG(!d, 0, "Directory must be opened before use.");
+	ERR_FAIL_COND_V_MSG(!is_open(), 0, "Directory must be opened before use.");
 	return d->get_space_left() / 1024 * 1024; //return value in megabytes, given binding is int
 }
 
 Error _Directory::copy(String p_from, String p_to) {
-	ERR_FAIL_COND_V_MSG(!d, ERR_UNCONFIGURED, "Directory must be opened before use.");
+	ERR_FAIL_COND_V_MSG(!is_open(), ERR_UNCONFIGURED, "Directory must be opened before use.");
 	return d->copy(p_from, p_to);
 }
 
 Error _Directory::rename(String p_from, String p_to) {
-	ERR_FAIL_COND_V_MSG(!d, ERR_UNCONFIGURED, "Directory must be opened before use.");
+	ERR_FAIL_COND_V_MSG(!is_open(), ERR_UNCONFIGURED, "Directory must be opened before use.");
 	if (!p_from.is_rel_path()) {
 		DirAccess *d = DirAccess::create_for_path(p_from);
 		Error err = d->rename(p_from, p_to);
@@ -1745,7 +1757,7 @@ Error _Directory::rename(String p_from, String p_to) {
 }
 
 Error _Directory::remove(String p_name) {
-	ERR_FAIL_COND_V_MSG(!d, ERR_UNCONFIGURED, "Directory must be opened before use.");
+	ERR_FAIL_COND_V_MSG(!is_open(), ERR_UNCONFIGURED, "Directory must be opened before use.");
 	if (!p_name.is_rel_path()) {
 		DirAccess *d = DirAccess::create_for_path(p_name);
 		Error err = d->remove(p_name);
@@ -2456,3 +2468,154 @@ Ref<JSONParseResult> _JSON::parse(const String &p_json) {
 }
 
 _JSON *_JSON::singleton = nullptr;
+
+////// _EngineDebugger //////
+
+void _EngineDebugger::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("is_active"), &_EngineDebugger::is_active);
+
+	ClassDB::bind_method(D_METHOD("register_profiler", "name", "toggle", "add", "tick"), &_EngineDebugger::register_profiler);
+	ClassDB::bind_method(D_METHOD("unregister_profiler", "name"), &_EngineDebugger::unregister_profiler);
+	ClassDB::bind_method(D_METHOD("is_profiling", "name"), &_EngineDebugger::is_profiling);
+	ClassDB::bind_method(D_METHOD("has_profiler", "name"), &_EngineDebugger::has_profiler);
+
+	ClassDB::bind_method(D_METHOD("profiler_add_frame_data", "name", "data"), &_EngineDebugger::profiler_add_frame_data);
+	ClassDB::bind_method(D_METHOD("profiler_enable", "name", "enable", "arguments"), &_EngineDebugger::profiler_enable, DEFVAL(Array()));
+
+	ClassDB::bind_method(D_METHOD("register_message_capture", "name", "callable"), &_EngineDebugger::register_message_capture);
+	ClassDB::bind_method(D_METHOD("unregister_message_capture", "name"), &_EngineDebugger::unregister_message_capture);
+	ClassDB::bind_method(D_METHOD("has_capture", "name"), &_EngineDebugger::has_capture);
+
+	ClassDB::bind_method(D_METHOD("send_message", "message", "data"), &_EngineDebugger::send_message);
+}
+
+bool _EngineDebugger::is_active() {
+	return EngineDebugger::is_active();
+}
+
+void _EngineDebugger::register_profiler(const StringName &p_name, const Callable &p_toggle, const Callable &p_add, const Callable &p_tick) {
+	ERR_FAIL_COND_MSG(profilers.has(p_name) || has_profiler(p_name), "Profiler already registered: " + p_name);
+	profilers.insert(p_name, ProfilerCallable(p_toggle, p_add, p_tick));
+	ProfilerCallable &p = profilers[p_name];
+	EngineDebugger::Profiler profiler(
+			&p,
+			&_EngineDebugger::call_toggle,
+			&_EngineDebugger::call_add,
+			&_EngineDebugger::call_tick);
+	EngineDebugger::register_profiler(p_name, profiler);
+}
+
+void _EngineDebugger::unregister_profiler(const StringName &p_name) {
+	ERR_FAIL_COND_MSG(!profilers.has(p_name), "Profiler not registered: " + p_name);
+	EngineDebugger::unregister_profiler(p_name);
+	profilers.erase(p_name);
+}
+
+bool _EngineDebugger::_EngineDebugger::is_profiling(const StringName &p_name) {
+	return EngineDebugger::is_profiling(p_name);
+}
+
+bool _EngineDebugger::has_profiler(const StringName &p_name) {
+	return EngineDebugger::has_profiler(p_name);
+}
+
+void _EngineDebugger::profiler_add_frame_data(const StringName &p_name, const Array &p_data) {
+	EngineDebugger::profiler_add_frame_data(p_name, p_data);
+}
+
+void _EngineDebugger::profiler_enable(const StringName &p_name, bool p_enabled, const Array &p_opts) {
+	if (EngineDebugger::get_singleton()) {
+		EngineDebugger::get_singleton()->profiler_enable(p_name, p_enabled, p_opts);
+	}
+}
+
+void _EngineDebugger::register_message_capture(const StringName &p_name, const Callable &p_callable) {
+	ERR_FAIL_COND_MSG(captures.has(p_name) || has_capture(p_name), "Capture already registered: " + p_name);
+	captures.insert(p_name, p_callable);
+	Callable &c = captures[p_name];
+	EngineDebugger::Capture capture(&c, &_EngineDebugger::call_capture);
+	EngineDebugger::register_message_capture(p_name, capture);
+}
+
+void _EngineDebugger::unregister_message_capture(const StringName &p_name) {
+	ERR_FAIL_COND_MSG(!captures.has(p_name), "Capture not registered: " + p_name);
+	EngineDebugger::unregister_message_capture(p_name);
+	captures.erase(p_name);
+}
+
+bool _EngineDebugger::has_capture(const StringName &p_name) {
+	return EngineDebugger::has_capture(p_name);
+}
+
+void _EngineDebugger::send_message(const String &p_msg, const Array &p_data) {
+	ERR_FAIL_COND_MSG(!EngineDebugger::is_active(), "Can't send message. No active debugger");
+	EngineDebugger::get_singleton()->send_message(p_msg, p_data);
+}
+
+void _EngineDebugger::call_toggle(void *p_user, bool p_enable, const Array &p_opts) {
+	Callable &toggle = ((ProfilerCallable *)p_user)->callable_toggle;
+	if (toggle.is_null()) {
+		return;
+	}
+	Variant enable = p_enable, opts = p_opts;
+	const Variant *args[2] = { &enable, &opts };
+	Variant retval;
+	Callable::CallError err;
+	toggle.call(args, 2, retval, err);
+	ERR_FAIL_COND_MSG(err.error != Callable::CallError::CALL_OK, "Error calling 'toggle' to callable: " + Variant::get_callable_error_text(toggle, args, 2, err));
+}
+
+void _EngineDebugger::call_add(void *p_user, const Array &p_data) {
+	Callable &add = ((ProfilerCallable *)p_user)->callable_add;
+	if (add.is_null()) {
+		return;
+	}
+	Variant data = p_data;
+	const Variant *args[1] = { &data };
+	Variant retval;
+	Callable::CallError err;
+	add.call(args, 1, retval, err);
+	ERR_FAIL_COND_MSG(err.error != Callable::CallError::CALL_OK, "Error calling 'add' to callable: " + Variant::get_callable_error_text(add, args, 1, err));
+}
+
+void _EngineDebugger::call_tick(void *p_user, float p_frame_time, float p_idle_time, float p_physics_time, float p_physics_frame_time) {
+	Callable &tick = ((ProfilerCallable *)p_user)->callable_tick;
+	if (tick.is_null()) {
+		return;
+	}
+	Variant frame_time = p_frame_time, idle_time = p_idle_time, physics_time = p_physics_time, physics_frame_time = p_physics_frame_time;
+	const Variant *args[4] = { &frame_time, &idle_time, &physics_time, &physics_frame_time };
+	Variant retval;
+	Callable::CallError err;
+	tick.call(args, 4, retval, err);
+	ERR_FAIL_COND_MSG(err.error != Callable::CallError::CALL_OK, "Error calling 'tick' to callable: " + Variant::get_callable_error_text(tick, args, 4, err));
+}
+
+Error _EngineDebugger::call_capture(void *p_user, const String &p_cmd, const Array &p_data, bool &r_captured) {
+	Callable &capture = *(Callable *)p_user;
+	if (capture.is_null()) {
+		return FAILED;
+	}
+	Variant cmd = p_cmd, data = p_data;
+	const Variant *args[2] = { &cmd, &data };
+	Variant retval;
+	Callable::CallError err;
+	capture.call(args, 2, retval, err);
+	ERR_FAIL_COND_V_MSG(err.error != Callable::CallError::CALL_OK, FAILED, "Error calling 'capture' to callable: " + Variant::get_callable_error_text(capture, args, 2, err));
+	ERR_FAIL_COND_V_MSG(retval.get_type() != Variant::BOOL, FAILED, "Error calling 'capture' to callable: " + String(capture) + ". Return type is not bool.");
+	r_captured = retval;
+	return OK;
+}
+
+_EngineDebugger::~_EngineDebugger() {
+	for (Map<StringName, Callable>::Element *E = captures.front(); E; E = E->next()) {
+		EngineDebugger::unregister_message_capture(E->key());
+	}
+	captures.clear();
+	for (Map<StringName, ProfilerCallable>::Element *E = profilers.front(); E; E = E->next()) {
+		EngineDebugger::unregister_profiler(E->key());
+	}
+	profilers.clear();
+}
+
+_EngineDebugger *_EngineDebugger::singleton = nullptr;

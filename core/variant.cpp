@@ -1409,7 +1409,7 @@ Variant::operator int64_t() const {
 		case FLOAT:
 			return _data._float;
 		case STRING:
-			return operator String().to_int64();
+			return operator String().to_int();
 		default: {
 			return 0;
 		}
@@ -1454,7 +1454,7 @@ Variant::operator signed long() const {
 		case INT:
 			return _data._int;
 		case FLOAT:
-			return _data._real;
+			return _data._float;
 		case STRING:
 			return operator String().to_int();
 		default: {
@@ -1474,7 +1474,7 @@ Variant::operator unsigned long() const {
 		case INT:
 			return _data._int;
 		case FLOAT:
-			return _data._real;
+			return _data._float;
 		case STRING:
 			return operator String().to_int();
 		default: {
@@ -1558,7 +1558,7 @@ Variant::operator unsigned char() const {
 	}
 }
 
-Variant::operator CharType() const {
+Variant::operator char32_t() const {
 	return operator unsigned int();
 }
 
@@ -1573,7 +1573,7 @@ Variant::operator float() const {
 		case FLOAT:
 			return _data._float;
 		case STRING:
-			return operator String().to_double();
+			return operator String().to_float();
 		default: {
 			return 0;
 		}
@@ -1591,7 +1591,7 @@ Variant::operator double() const {
 		case FLOAT:
 			return _data._float;
 		case STRING:
-			return operator String().to_double();
+			return operator String().to_float();
 		default: {
 			return 0;
 		}
@@ -2445,7 +2445,7 @@ Variant::Variant(const char *const p_cstring) {
 	memnew_placement(_data._mem, String((const char *)p_cstring));
 }
 
-Variant::Variant(const CharType *p_wstring) {
+Variant::Variant(const char32_t *p_wstring) {
 	type = STRING;
 	memnew_placement(_data._mem, String(p_wstring));
 }

@@ -188,7 +188,7 @@ int RichTextLabel::_process_line(ItemFrame *p_frame, const Vector2 &p_ofs, int &
 		wofs += line_ofs;
 	}
 
-	int begin = wofs;
+	int begin = margin;
 
 	Ref<Font> cfont = _find_font(it);
 	if (cfont.is_null()) {
@@ -256,7 +256,7 @@ int RichTextLabel::_process_line(ItemFrame *p_frame, const Vector2 &p_ofs, int &
 			lh = line < l.height_caches.size() ? l.height_caches[line] : 1;                                                                                     \
 			line_ascent = line < l.ascent_caches.size() ? l.ascent_caches[line] : 1;                                                                            \
 			line_descent = line < l.descent_caches.size() ? l.descent_caches[line] : 1;                                                                         \
-			if (p_mode == PROCESS_DRAW) {                                                                                                                       \
+			if (align != ALIGN_FILL) {                                                                                                                          \
 				if (line < l.offset_caches.size()) {                                                                                                            \
 					wofs = l.offset_caches[line];                                                                                                               \
 				}                                                                                                                                               \
@@ -354,8 +354,8 @@ int RichTextLabel::_process_line(ItemFrame *p_frame, const Vector2 &p_ofs, int &
 					font = p_base_font;
 				}
 
-				const CharType *c = text->text.c_str();
-				const CharType *cf = c;
+				const char32_t *c = text->text.get_data();
+				const char32_t *cf = c;
 				int ascent = font->get_ascent();
 				int descent = font->get_descent();
 
@@ -461,7 +461,7 @@ int RichTextLabel::_process_line(ItemFrame *p_frame, const Vector2 &p_ofs, int &
 								bool selected = false;
 								Color fx_color = Color(color);
 								Point2 fx_offset;
-								CharType fx_char = c[i];
+								char32_t fx_char = c[i];
 
 								if (selection.active) {
 									int cofs = (&c[i]) - cf;
@@ -1020,7 +1020,8 @@ void RichTextLabel::_notification(int p_what) {
 
 			visible_line_count = 0;
 			while (y < size.height && from_line < main->lines.size()) {
-				visible_line_count += _process_line(main, text_rect.get_position(), y, text_rect.get_size().width - scroll_w, from_line, PROCESS_DRAW, base_font, base_color, font_color_shadow, use_outline, shadow_ofs, Point2i(), nullptr, nullptr, nullptr, total_chars);
+				visible_line_count++;
+				_process_line(main, text_rect.get_position(), y, text_rect.get_size().width - scroll_w, from_line, PROCESS_DRAW, base_font, base_color, font_color_shadow, use_outline, shadow_ofs, Point2i(), nullptr, nullptr, nullptr, total_chars);
 				total_chars += main->lines[from_line].char_count;
 
 				from_line++;
@@ -2528,9 +2529,9 @@ bool RichTextLabel::search(const String &p_string, bool p_from_selection, bool p
 	return false;
 }
 
-void RichTextLabel::selection_copy() {
+String RichTextLabel::get_selected_text() {
 	if (!selection.active || !selection.enabled) {
-		return;
+		return "";
 	}
 
 	String text;
@@ -2559,6 +2560,12 @@ void RichTextLabel::selection_copy() {
 
 		item = _get_next_item(item, true);
 	}
+
+	return text;
+}
+
+void RichTextLabel::selection_copy() {
+	String text = get_selected_text();
 
 	if (text != "") {
 		DisplayServer::get_singleton()->clipboard_set(text);
@@ -2769,7 +2776,7 @@ void RichTextLabel::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "selection_enabled"), "set_selection_enabled", "is_selection_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "override_selected_font_color"), "set_override_selected_font_color", "is_overriding_selected_font_color");
 
-	ADD_PROPERTY(PropertyInfo(Variant::ARRAY, "custom_effects", PROPERTY_HINT_RESOURCE_TYPE, "17/17:RichTextEffect", (PROPERTY_USAGE_DEFAULT | PROPERTY_USAGE_SCRIPT_VARIABLE), "RichTextEffect"), "set_effects", "get_effects");
+	ADD_PROPERTY(PropertyInfo(Variant::ARRAY, "custom_effects", PROPERTY_HINT_ARRAY_TYPE, "RichTextEffect", (PROPERTY_USAGE_DEFAULT | PROPERTY_USAGE_SCRIPT_VARIABLE)), "set_effects", "get_effects");
 
 	ADD_SIGNAL(MethodInfo("meta_clicked", PropertyInfo(Variant::NIL, "meta", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NIL_IS_VARIANT)));
 	ADD_SIGNAL(MethodInfo("meta_hover_started", PropertyInfo(Variant::NIL, "meta", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NIL_IS_VARIANT)));
@@ -2897,7 +2904,7 @@ Dictionary RichTextLabel::parse_expressions_for_values(Vector<String> p_expressi
 					a.append(false);
 				}
 			} else if (!decimal.search(values[j]).is_null()) {
-				a.append(values[j].to_double());
+				a.append(values[j].to_float());
 			} else if (!numerical.search(values[j]).is_null()) {
 				a.append(values[j].to_int());
 			} else {

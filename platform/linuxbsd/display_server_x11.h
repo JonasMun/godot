@@ -36,7 +36,6 @@
 #include "servers/display_server.h"
 
 #include "core/input/input.h"
-
 #include "drivers/alsa/audio_driver_alsa.h"
 #include "drivers/alsamidi/midi_driver_alsamidi.h"
 #include "drivers/pulseaudio/audio_driver_pulseaudio.h"
@@ -133,6 +132,9 @@ class DisplayServerX11 : public DisplayServer {
 
 		ObjectID instance_id;
 
+		bool menu_type = false;
+		bool no_focus = false;
+
 		//better to guess on the fly, given WM can change it
 		//WindowMode mode;
 		bool fullscreen = false; //OS can't exit from this mode
@@ -140,6 +142,10 @@ class DisplayServerX11 : public DisplayServer {
 		bool borderless = false;
 		bool resize_disabled = false;
 		Vector2i last_position_before_fs;
+		bool focused = false;
+		bool minimized = false;
+
+		unsigned int focus_order = 0;
 	};
 
 	Map<WindowID, WindowData> windows;
@@ -165,6 +171,8 @@ class DisplayServerX11 : public DisplayServer {
 	uint64_t last_click_ms;
 	int last_click_button_index;
 	uint32_t last_button_state;
+	bool app_focused = false;
+	uint64_t time_since_no_focus = 0;
 
 	struct {
 		int opcode;
@@ -196,8 +204,8 @@ class DisplayServerX11 : public DisplayServer {
 
 	void _handle_key_event(WindowID p_window, XKeyEvent *p_event, bool p_echo = false);
 
-	bool minimized;
-	bool window_has_focus;
+	//bool minimized;
+	//bool window_has_focus;
 	bool do_mouse_warp;
 
 	const char *cursor_theme;
@@ -211,7 +219,7 @@ class DisplayServerX11 : public DisplayServer {
 	bool layered_window;
 
 	String rendering_driver;
-	bool window_focused;
+	//bool window_focused;
 	//void set_wm_border(bool p_enabled);
 	void set_wm_fullscreen(bool p_enabled);
 	void set_wm_above(bool p_enabled);
@@ -231,6 +239,8 @@ class DisplayServerX11 : public DisplayServer {
 	static Property _read_property(Display *p_display, Window p_window, Atom p_property);
 
 	void _update_real_mouse_position(const WindowData &wd);
+	bool _window_maximize_check(WindowID p_window, const char *p_atom_name) const;
+	void _update_size_hints(WindowID p_window);
 	void _set_wm_fullscreen(WindowID p_window, bool p_enabled);
 	void _set_wm_maximized(WindowID p_window, bool p_enabled);
 
@@ -272,6 +282,7 @@ public:
 	virtual Vector<DisplayServer::WindowID> get_window_list() const;
 
 	virtual WindowID create_sub_window(WindowMode p_mode, uint32_t p_flags, const Rect2i &p_rect = Rect2i());
+	virtual void show_window(WindowID p_id);
 	virtual void delete_sub_window(WindowID p_id);
 
 	virtual WindowID get_window_at_screen_position(const Point2i &p_position) const;
@@ -280,6 +291,8 @@ public:
 	virtual ObjectID window_get_attached_instance_id(WindowID p_window = MAIN_WINDOW_ID) const;
 
 	virtual void window_set_title(const String &p_title, WindowID p_window = MAIN_WINDOW_ID);
+	virtual void window_set_mouse_passthrough(const Vector<Vector2> &p_region, WindowID p_window = MAIN_WINDOW_ID);
+
 	virtual void window_set_rect_changed_callback(const Callable &p_callable, WindowID p_window = MAIN_WINDOW_ID);
 	virtual void window_set_window_event_callback(const Callable &p_callable, WindowID p_window = MAIN_WINDOW_ID);
 	virtual void window_set_input_event_callback(const Callable &p_callable, WindowID p_window = MAIN_WINDOW_ID);

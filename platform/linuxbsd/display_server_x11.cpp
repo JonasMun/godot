@@ -32,35 +32,26 @@
 
 #ifdef X11_ENABLED
 
-#include "detect_prime_x11.h"
-
-#include "core/os/dir_access.h"
 #include "core/print_string.h"
-#include "errno.h"
+#include "core/project_settings.h"
+#include "detect_prime_x11.h"
 #include "key_mapping_x11.h"
-
-#if defined(OPENGL_ENABLED)
-#include "drivers/gles2/rasterizer_gles2.h"
-#endif
+#include "main/main.h"
+#include "scene/resources/texture.h"
 
 #if defined(VULKAN_ENABLED)
 #include "servers/rendering/rasterizer_rd/rasterizer_rd.h"
-#endif
-
-#include "scene/resources/texture.h"
-
-#ifdef HAVE_MNTENT
-#include <mntent.h>
 #endif
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "X11/Xutil.h"
+#include <X11/Xatom.h>
+#include <X11/Xutil.h>
+#include <X11/extensions/Xinerama.h>
+#include <X11/extensions/shape.h>
 
-#include "X11/Xatom.h"
-#include "X11/extensions/Xinerama.h"
 // ICCCM
 #define WM_NormalState 1L // window normal state
 #define WM_IconicState 3L // window minimized
@@ -68,8 +59,6 @@
 #define _NET_WM_STATE_REMOVE 0L // remove/unset property
 #define _NET_WM_STATE_ADD 1L // add/set property
 #define _NET_WM_STATE_TOGGLE 2L // toggle property
-
-#include "main/main.h"
 
 #include <dlfcn.h>
 #include <fcntl.h>
@@ -82,13 +71,8 @@
 #undef KEY_TAB
 #endif
 
-#include <X11/Xatom.h>
-
 #undef CursorShape
-
 #include <X11/XKBlib.h>
-
-#include "core/project_settings.h"
 
 // 2.2 is the first release with multitouch
 #define XINPUT_CLIENT_VERSION_MAJOR 2
@@ -99,6 +83,13 @@
 #define VALUATOR_PRESSURE 2
 #define VALUATOR_TILTX 3
 #define VALUATOR_TILTY 4
+
+//#define DISPLAY_SERVER_X11_DEBUG_LOGS_ENABLED
+#ifdef DISPLAY_SERVER_X11_DEBUG_LOGS_ENABLED
+#define DEBUG_LOG_X11(...) printf(__VA_ARGS__)
+#else
+#define DEBUG_LOG_X11(...)
+#endif
 
 static const double abs_resolution_mult = 10000.0;
 static const double abs_resolution_range_mult = 10.0;
@@ -417,17 +408,24 @@ void DisplayServerX11::mouse_warp_to_position(const Point2i &p_to) {
 	if (mouse_mode == MOUSE_MODE_CAPTURED) {
 		last_mouse_pos = p_to;
 	} else {
-		/*XWindowAttributes xwa;
-		XGetWindowAttributes(x11_display, x11_window, &xwa);
-		printf("%d %d\n", xwa.x, xwa.y); needed? */
-
 		XWarpPointer(x11_display, None, windows[MAIN_WINDOW_ID].x11_window,
 				0, 0, 0, 0, (int)p_to.x, (int)p_to.y);
 	}
 }
 
 Point2i DisplayServerX11::mouse_get_position() const {
-	return last_mouse_pos;
+	int root_x, root_y;
+	int win_x, win_y;
+	unsigned int mask_return;
+	Window window_returned;
+
+	Bool result = XQueryPointer(x11_display, RootWindow(x11_display, DefaultScreen(x11_display)), &window_returned,
+			&window_returned, &root_x, &root_y, &win_x, &win_y,
+			&mask_return);
+	if (result == True) {
+		return Point2i(root_x, root_y);
+	}
+	return Point2i();
 }
 
 Point2i DisplayServerX11::mouse_get_absolute_position() const {
@@ -691,6 +689,14 @@ DisplayServer::WindowID DisplayServerX11::create_sub_window(WindowMode p_mode, u
 	return id;
 }
 
+void DisplayServerX11::show_window(WindowID p_id) {
+	_THREAD_SAFE_METHOD_
+
+	WindowData &wd = windows[p_id];
+
+	XMapWindow(x11_display, wd.x11_window);
+}
+
 void DisplayServerX11::delete_sub_window(WindowID p_id) {
 	_THREAD_SAFE_METHOD_
 
@@ -698,6 +704,8 @@ void DisplayServerX11::delete_sub_window(WindowID p_id) {
 	ERR_FAIL_COND_MSG(p_id == MAIN_WINDOW_ID, "Main window can't be deleted"); //ma
 
 	WindowData &wd = windows[p_id];
+
+	DEBUG_LOG_X11("delete_sub_window: %lu (%u) \n", wd.x11_window, p_id);
 
 	while (wd.transient_children.size()) {
 		window_set_transient(wd.transient_children.front()->get(), INVALID_WINDOW_ID);
@@ -735,7 +743,31 @@ ObjectID DisplayServerX11::window_get_attached_instance_id(WindowID p_window) co
 }
 
 DisplayServerX11::WindowID DisplayServerX11::get_window_at_screen_position(const Point2i &p_position) const {
-	return INVALID_WINDOW_ID;
+	WindowID found_window = INVALID_WINDOW_ID;
+	WindowID parent_window = INVALID_WINDOW_ID;
+	unsigned int focus_order = 0;
+	for (Map<WindowID, WindowData>::Element *E = windows.front(); E; E = E->next()) {
+		const WindowData &wd = E->get();
+
+		// Discard windows with no focus.
+		if (wd.focus_order == 0) {
+			continue;
+		}
+
+		// Find topmost window which contains the given position.
+		WindowID window_id = E->key();
+		Rect2i win_rect = Rect2i(window_get_position(window_id), window_get_size(window_id));
+		if (win_rect.has_point(p_position)) {
+			// For siblings, pick the window which was focused last.
+			if ((parent_window != wd.transient_parent) || (wd.focus_order > focus_order)) {
+				found_window = window_id;
+				parent_window = wd.transient_parent;
+				focus_order = wd.focus_order;
+			}
+		}
+	}
+
+	return found_window;
 }
 
 void DisplayServerX11::window_set_title(const String &p_title, WindowID p_window) {
@@ -749,6 +781,38 @@ void DisplayServerX11::window_set_title(const String &p_title, WindowID p_window
 	Atom _net_wm_name = XInternAtom(x11_display, "_NET_WM_NAME", false);
 	Atom utf8_string = XInternAtom(x11_display, "UTF8_STRING", false);
 	XChangeProperty(x11_display, wd.x11_window, _net_wm_name, utf8_string, 8, PropModeReplace, (unsigned char *)p_title.utf8().get_data(), p_title.utf8().length());
+}
+
+void DisplayServerX11::window_set_mouse_passthrough(const Vector<Vector2> &p_region, WindowID p_window) {
+	_THREAD_SAFE_METHOD_
+
+	ERR_FAIL_COND(!windows.has(p_window));
+	const WindowData &wd = windows[p_window];
+
+	int event_base, error_base;
+	const Bool ext_okay = XShapeQueryExtension(x11_display, &event_base, &error_base);
+	if (ext_okay) {
+		Region region;
+		if (p_region.size() == 0) {
+			region = XCreateRegion();
+			XRectangle rect;
+			rect.x = 0;
+			rect.y = 0;
+			rect.width = window_get_real_size(p_window).x;
+			rect.height = window_get_real_size(p_window).y;
+			XUnionRectWithRegion(&rect, region, region);
+		} else {
+			XPoint *points = (XPoint *)memalloc(sizeof(XPoint) * p_region.size());
+			for (int i = 0; i < p_region.size(); i++) {
+				points[i].x = p_region[i].x;
+				points[i].y = p_region[i].y;
+			}
+			region = XPolygonRegion(points, p_region.size(), EvenOddRule);
+			memfree(points);
+		}
+		XShapeCombineRegion(x11_display, wd.x11_window, ShapeInput, 0, 0, region, ShapeSet);
+		XDestroyRegion(region);
+	}
 }
 
 void DisplayServerX11::window_set_rect_changed_callback(const Callable &p_callable, WindowID p_window) {
@@ -844,24 +908,34 @@ void DisplayServerX11::window_set_transient(WindowID p_window, WindowID p_parent
 	ERR_FAIL_COND(!windows.has(p_window));
 	WindowData &wd_window = windows[p_window];
 
-	ERR_FAIL_COND(wd_window.transient_parent == p_parent);
+	WindowID prev_parent = wd_window.transient_parent;
+	ERR_FAIL_COND(prev_parent == p_parent);
 
 	ERR_FAIL_COND_MSG(wd_window.on_top, "Windows with the 'on top' can't become transient.");
 	if (p_parent == INVALID_WINDOW_ID) {
 		//remove transient
 
-		ERR_FAIL_COND(wd_window.transient_parent == INVALID_WINDOW_ID);
-		ERR_FAIL_COND(!windows.has(wd_window.transient_parent));
+		ERR_FAIL_COND(prev_parent == INVALID_WINDOW_ID);
+		ERR_FAIL_COND(!windows.has(prev_parent));
 
-		WindowData &wd_parent = windows[wd_window.transient_parent];
+		WindowData &wd_parent = windows[prev_parent];
 
 		wd_window.transient_parent = INVALID_WINDOW_ID;
 		wd_parent.transient_children.erase(p_window);
 
 		XSetTransientForHint(x11_display, wd_window.x11_window, None);
+
+		// Set focus to parent sub window to avoid losing all focus with nested menus.
+		// RevertToPointerRoot is used to make sure we don't lose all focus in case
+		// a subwindow and its parent are both destroyed.
+		if (wd_window.menu_type && !wd_window.no_focus) {
+			if (!wd_parent.no_focus) {
+				XSetInputFocus(x11_display, wd_parent.x11_window, RevertToPointerRoot, CurrentTime);
+			}
+		}
 	} else {
 		ERR_FAIL_COND(!windows.has(p_parent));
-		ERR_FAIL_COND_MSG(wd_window.transient_parent != INVALID_WINDOW_ID, "Window already has a transient parent");
+		ERR_FAIL_COND_MSG(prev_parent != INVALID_WINDOW_ID, "Window already has a transient parent");
 		WindowData &wd_parent = windows[p_parent];
 
 		wd_window.transient_parent = p_parent;
@@ -869,6 +943,46 @@ void DisplayServerX11::window_set_transient(WindowID p_window, WindowID p_parent
 
 		XSetTransientForHint(x11_display, wd_window.x11_window, wd_parent.x11_window);
 	}
+}
+
+// Helper method. Assumes that the window id has already been checked and exists.
+void DisplayServerX11::_update_size_hints(WindowID p_window) {
+	WindowData &wd = windows[p_window];
+	WindowMode window_mode = window_get_mode(p_window);
+	XSizeHints *xsh = XAllocSizeHints();
+
+	// Always set the position and size hints - they should be synchronized with the actual values after the window is mapped anyway
+	xsh->flags |= PPosition | PSize;
+	xsh->x = wd.position.x;
+	xsh->y = wd.position.y;
+	xsh->width = wd.size.width;
+	xsh->height = wd.size.height;
+
+	if (window_mode == WINDOW_MODE_FULLSCREEN) {
+		// Do not set any other hints to prevent the window manager from ignoring the fullscreen flags
+	} else if (window_get_flag(WINDOW_FLAG_RESIZE_DISABLED, p_window)) {
+		// If resizing is disabled, use the forced size
+		xsh->flags |= PMinSize | PMaxSize;
+		xsh->min_width = wd.size.x;
+		xsh->max_width = wd.size.x;
+		xsh->min_height = wd.size.y;
+		xsh->max_height = wd.size.y;
+	} else {
+		// Otherwise, just respect min_size and max_size
+		if (wd.min_size != Size2i()) {
+			xsh->flags |= PMinSize;
+			xsh->min_width = wd.min_size.x;
+			xsh->min_height = wd.min_size.y;
+		}
+		if (wd.max_size != Size2i()) {
+			xsh->flags |= PMaxSize;
+			xsh->max_width = wd.max_size.x;
+			xsh->max_height = wd.max_size.y;
+		}
+	}
+
+	XSetWMNormalHints(x11_display, wd.x11_window, xsh);
+	XFree(xsh);
 }
 
 Point2i DisplayServerX11::window_get_position(WindowID p_window) const {
@@ -924,25 +1038,8 @@ void DisplayServerX11::window_set_max_size(const Size2i p_size, WindowID p_windo
 	}
 	wd.max_size = p_size;
 
-	if (!window_get_flag(WINDOW_FLAG_RESIZE_DISABLED, p_window)) {
-		XSizeHints *xsh;
-		xsh = XAllocSizeHints();
-		xsh->flags = 0L;
-		if (wd.min_size != Size2i()) {
-			xsh->flags |= PMinSize;
-			xsh->min_width = wd.min_size.x;
-			xsh->min_height = wd.min_size.y;
-		}
-		if (wd.max_size != Size2i()) {
-			xsh->flags |= PMaxSize;
-			xsh->max_width = wd.max_size.x;
-			xsh->max_height = wd.max_size.y;
-		}
-		XSetWMNormalHints(x11_display, wd.x11_window, xsh);
-		XFree(xsh);
-
-		XFlush(x11_display);
-	}
+	_update_size_hints(p_window);
+	XFlush(x11_display);
 }
 
 Size2i DisplayServerX11::window_get_max_size(WindowID p_window) const {
@@ -966,25 +1063,8 @@ void DisplayServerX11::window_set_min_size(const Size2i p_size, WindowID p_windo
 	}
 	wd.min_size = p_size;
 
-	if (!window_get_flag(WINDOW_FLAG_RESIZE_DISABLED, p_window)) {
-		XSizeHints *xsh;
-		xsh = XAllocSizeHints();
-		xsh->flags = 0L;
-		if (wd.min_size != Size2i()) {
-			xsh->flags |= PMinSize;
-			xsh->min_width = wd.min_size.x;
-			xsh->min_height = wd.min_size.y;
-		}
-		if (wd.max_size != Size2i()) {
-			xsh->flags |= PMaxSize;
-			xsh->max_width = wd.max_size.x;
-			xsh->max_height = wd.max_size.y;
-		}
-		XSetWMNormalHints(x11_display, wd.x11_window, xsh);
-		XFree(xsh);
-
-		XFlush(x11_display);
-	}
+	_update_size_hints(p_window);
+	XFlush(x11_display);
 }
 
 Size2i DisplayServerX11::window_get_min_size(WindowID p_window) const {
@@ -1017,36 +1097,14 @@ void DisplayServerX11::window_set_size(const Size2i p_size, WindowID p_window) {
 	int old_w = xwa.width;
 	int old_h = xwa.height;
 
-	// If window resizable is disabled we need to update the attributes first
-	XSizeHints *xsh;
-	xsh = XAllocSizeHints();
-	if (!window_get_flag(WINDOW_FLAG_RESIZE_DISABLED, p_window)) {
-		xsh->flags = PMinSize | PMaxSize;
-		xsh->min_width = size.x;
-		xsh->max_width = size.x;
-		xsh->min_height = size.y;
-		xsh->max_height = size.y;
-	} else {
-		xsh->flags = 0L;
-		if (wd.min_size != Size2i()) {
-			xsh->flags |= PMinSize;
-			xsh->min_width = wd.min_size.x;
-			xsh->min_height = wd.min_size.y;
-		}
-		if (wd.max_size != Size2i()) {
-			xsh->flags |= PMaxSize;
-			xsh->max_width = wd.max_size.x;
-			xsh->max_height = wd.max_size.y;
-		}
-	}
-	XSetWMNormalHints(x11_display, wd.x11_window, xsh);
-	XFree(xsh);
+	// Update our videomode width and height
+	wd.size = size;
+
+	// Update the size hints first to make sure the window size can be set
+	_update_size_hints(p_window);
 
 	// Resize the window
 	XResizeWindow(x11_display, wd.x11_window, size.x, size.y);
-
-	// Update our videomode width and height
-	wd.size = size;
 
 	for (int timeout = 0; timeout < 50; ++timeout) {
 		XSync(x11_display, False);
@@ -1098,18 +1156,19 @@ Size2i DisplayServerX11::window_get_real_size(WindowID p_window) const {
 	return Size2i(w, h);
 }
 
-bool DisplayServerX11::window_is_maximize_allowed(WindowID p_window) const {
-	_THREAD_SAFE_METHOD_
-
+// Just a helper to reduce code duplication in `window_is_maximize_allowed`
+// and `_set_wm_maximized`.
+bool DisplayServerX11::_window_maximize_check(WindowID p_window, const char *p_atom_name) const {
 	ERR_FAIL_COND_V(!windows.has(p_window), false);
 	const WindowData &wd = windows[p_window];
 
-	Atom property = XInternAtom(x11_display, "_NET_WM_ALLOWED_ACTIONS", False);
+	Atom property = XInternAtom(x11_display, p_atom_name, False);
 	Atom type;
 	int format;
 	unsigned long len;
 	unsigned long remaining;
 	unsigned char *data = nullptr;
+	bool retval = false;
 
 	int result = XGetWindowProperty(
 			x11_display,
@@ -1141,13 +1200,20 @@ bool DisplayServerX11::window_is_maximize_allowed(WindowID p_window) const {
 			}
 
 			if (found_wm_act_max_horz || found_wm_act_max_vert) {
-				return true;
+				retval = true;
+				break;
 			}
 		}
-		XFree(atoms);
+
+		XFree(data);
 	}
 
-	return false;
+	return retval;
+}
+
+bool DisplayServerX11::window_is_maximize_allowed(WindowID p_window) const {
+	_THREAD_SAFE_METHOD_
+	return _window_maximize_check(p_window, "_NET_WM_ALLOWED_ACTIONS");
 }
 
 void DisplayServerX11::_set_wm_maximized(WindowID p_window, bool p_enabled) {
@@ -1195,14 +1261,9 @@ void DisplayServerX11::_set_wm_fullscreen(WindowID p_window, bool p_enabled) {
 		XChangeProperty(x11_display, wd.x11_window, property, property, 32, PropModeReplace, (unsigned char *)&hints, 5);
 	}
 
-	if (p_enabled && window_get_flag(WINDOW_FLAG_RESIZE_DISABLED, p_window)) {
+	if (p_enabled) {
 		// Set the window as resizable to prevent window managers to ignore the fullscreen state flag.
-		XSizeHints *xsh;
-
-		xsh = XAllocSizeHints();
-		xsh->flags = 0L;
-		XSetWMNormalHints(x11_display, wd.x11_window, xsh);
-		XFree(xsh);
+		_update_size_hints(p_window);
 	}
 
 	// Using EWMH -- Extended Window Manager Hints
@@ -1230,30 +1291,7 @@ void DisplayServerX11::_set_wm_fullscreen(WindowID p_window, bool p_enabled) {
 
 	if (!p_enabled) {
 		// Reset the non-resizable flags if we un-set these before.
-		Size2i size = window_get_size(p_window);
-		XSizeHints *xsh;
-		xsh = XAllocSizeHints();
-		if (window_get_flag(WINDOW_FLAG_RESIZE_DISABLED, p_window)) {
-			xsh->flags = PMinSize | PMaxSize;
-			xsh->min_width = size.x;
-			xsh->max_width = size.x;
-			xsh->min_height = size.y;
-			xsh->max_height = size.y;
-		} else {
-			xsh->flags = 0L;
-			if (wd.min_size != Size2i()) {
-				xsh->flags |= PMinSize;
-				xsh->min_width = wd.min_size.x;
-				xsh->min_height = wd.min_size.y;
-			}
-			if (wd.max_size != Size2i()) {
-				xsh->flags |= PMaxSize;
-				xsh->max_width = wd.max_size.x;
-				xsh->max_height = wd.max_size.y;
-			}
-		}
-		XSetWMNormalHints(x11_display, wd.x11_window, xsh);
-		XFree(xsh);
+		_update_size_hints(p_window);
 
 		// put back or remove decorations according to the last set borderless state
 		Hints hints;
@@ -1311,12 +1349,12 @@ void DisplayServerX11::window_set_mode(WindowMode p_mode, WindowID p_window) {
 		} break;
 		case WINDOW_MODE_FULLSCREEN: {
 			//Remove full-screen
+			wd.fullscreen = false;
+
 			_set_wm_fullscreen(p_window, false);
 
 			//un-maximize required for always on top
 			bool on_top = window_get_flag(WINDOW_FLAG_ALWAYS_ON_TOP, p_window);
-
-			wd.fullscreen = false;
 
 			window_set_position(wd.last_position_before_fs, p_window);
 
@@ -1363,15 +1401,16 @@ void DisplayServerX11::window_set_mode(WindowMode p_mode, WindowID p_window) {
 		} break;
 		case WINDOW_MODE_FULLSCREEN: {
 			wd.last_position_before_fs = wd.position;
+
 			if (window_get_flag(WINDOW_FLAG_ALWAYS_ON_TOP, p_window)) {
 				_set_wm_maximized(p_window, true);
 			}
-			_set_wm_fullscreen(p_window, true);
+
 			wd.fullscreen = true;
+			_set_wm_fullscreen(p_window, true);
 		} break;
 		case WINDOW_MODE_MAXIMIZED: {
 			_set_wm_maximized(p_window, true);
-
 		} break;
 	}
 }
@@ -1385,60 +1424,14 @@ DisplayServer::WindowMode DisplayServerX11::window_get_mode(WindowID p_window) c
 	if (wd.fullscreen) { //if fullscreen, it's not in another mode
 		return WINDOW_MODE_FULLSCREEN;
 	}
-	{ //test maximized
-		// Using EWMH -- Extended Window Manager Hints
-		Atom property = XInternAtom(x11_display, "_NET_WM_STATE", False);
-		Atom type;
-		int format;
-		unsigned long len;
-		unsigned long remaining;
-		unsigned char *data = nullptr;
-		bool retval = false;
 
-		int result = XGetWindowProperty(
-				x11_display,
-				wd.x11_window,
-				property,
-				0,
-				1024,
-				False,
-				XA_ATOM,
-				&type,
-				&format,
-				&len,
-				&remaining,
-				&data);
-
-		if (result == Success && data) {
-			Atom *atoms = (Atom *)data;
-			Atom wm_max_horz = XInternAtom(x11_display, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
-			Atom wm_max_vert = XInternAtom(x11_display, "_NET_WM_STATE_MAXIMIZED_VERT", False);
-			bool found_wm_max_horz = false;
-			bool found_wm_max_vert = false;
-
-			for (uint64_t i = 0; i < len; i++) {
-				if (atoms[i] == wm_max_horz) {
-					found_wm_max_horz = true;
-				}
-				if (atoms[i] == wm_max_vert) {
-					found_wm_max_vert = true;
-				}
-
-				if (found_wm_max_horz && found_wm_max_vert) {
-					retval = true;
-					break;
-				}
-			}
-
-			XFree(data);
-		}
-
-		if (retval) {
-			return WINDOW_MODE_MAXIMIZED;
-		}
+	// Test maximized.
+	// Using EWMH -- Extended Window Manager Hints
+	if (_window_maximize_check(p_window, "_NET_WM_STATE")) {
+		return WINDOW_MODE_MAXIMIZED;
 	}
 
-	{ // test minimzed
+	{ // Test minimized.
 		// Using ICCCM -- Inter-Client Communication Conventions Manual
 		Atom property = XInternAtom(x11_display, "WM_STATE", True);
 		Atom type;
@@ -1471,7 +1464,7 @@ DisplayServer::WindowMode DisplayServerX11::window_get_mode(WindowID p_window) c
 		}
 	}
 
-	// all other discarded, return windowed.
+	// All other discarded, return windowed.
 
 	return WINDOW_MODE_WINDOWED;
 }
@@ -1484,37 +1477,11 @@ void DisplayServerX11::window_set_flag(WindowFlags p_flag, bool p_enabled, Windo
 
 	switch (p_flag) {
 		case WINDOW_FLAG_RESIZE_DISABLED: {
-			XSizeHints *xsh;
-			xsh = XAllocSizeHints();
-			if (p_enabled) {
-				Size2i size = window_get_size(p_window);
-
-				xsh->flags = PMinSize | PMaxSize;
-				xsh->min_width = size.x;
-				xsh->max_width = size.x;
-				xsh->min_height = size.y;
-				xsh->max_height = size.y;
-			} else {
-				xsh->flags = 0L;
-				if (wd.min_size != Size2i()) {
-					xsh->flags |= PMinSize;
-					xsh->min_width = wd.min_size.x;
-					xsh->min_height = wd.min_size.y;
-				}
-				if (wd.max_size != Size2i()) {
-					xsh->flags |= PMaxSize;
-					xsh->max_width = wd.max_size.x;
-					xsh->max_height = wd.max_size.y;
-				}
-			}
-
-			XSetWMNormalHints(x11_display, wd.x11_window, xsh);
-			XFree(xsh);
-
 			wd.resize_disabled = p_enabled;
 
-			XFlush(x11_display);
+			_update_size_hints(p_window);
 
+			XFlush(x11_display);
 		} break;
 		case WINDOW_FLAG_BORDERLESS: {
 			Hints hints;
@@ -2394,6 +2361,37 @@ void DisplayServerX11::_send_window_event(const WindowData &wd, WindowEvent p_ev
 void DisplayServerX11::process_events() {
 	_THREAD_SAFE_METHOD_
 
+#ifdef DISPLAY_SERVER_X11_DEBUG_LOGS_ENABLED
+	static int frame = 0;
+	++frame;
+#endif
+
+	if (app_focused) {
+		//verify that one of the windows has focus, else send focus out notification
+		bool focus_found = false;
+		for (Map<WindowID, WindowData>::Element *E = windows.front(); E; E = E->next()) {
+			if (E->get().focused) {
+				focus_found = true;
+				break;
+			}
+		}
+
+		if (!focus_found) {
+			uint64_t delta = OS::get_singleton()->get_ticks_msec() - time_since_no_focus;
+
+			if (delta > 250) {
+				//X11 can go between windows and have no focus for a while, when creating them or something else. Use this as safety to avoid unnecessary focus in/outs.
+				if (OS::get_singleton()->get_main_loop()) {
+					DEBUG_LOG_X11("All focus lost, triggering NOTIFICATION_APPLICATION_FOCUS_OUT\n");
+					OS::get_singleton()->get_main_loop()->notification(MainLoop::NOTIFICATION_APPLICATION_FOCUS_OUT);
+				}
+				app_focused = false;
+			}
+		} else {
+			time_since_no_focus = OS::get_singleton()->get_ticks_msec();
+		}
+	}
+
 	do_mouse_warp = false;
 
 	// Is the current mouse mode one where it needs to be grabbed.
@@ -2407,6 +2405,10 @@ void DisplayServerX11::process_events() {
 		XEvent event;
 		XNextEvent(x11_display, &event);
 
+		if (XFilterEvent(&event, None)) {
+			continue;
+		}
+
 		WindowID window_id = MAIN_WINDOW_ID;
 
 		// Assign the event to the relevant window
@@ -2415,10 +2417,6 @@ void DisplayServerX11::process_events() {
 				window_id = E->key();
 				break;
 			}
-		}
-
-		if (XFilterEvent(&event, None)) {
-			continue;
 		}
 
 		if (XGetEventData(x11_display, &event.xcookie)) {
@@ -2583,34 +2581,67 @@ void DisplayServerX11::process_events() {
 		XFreeEventData(x11_display, &event.xcookie);
 
 		switch (event.type) {
-			case Expose:
-				Main::force_redraw();
-				break;
+			case MapNotify: {
+				DEBUG_LOG_X11("[%u] MapNotify window=%lu (%u) \n", frame, event.xmap.window, window_id);
 
-			case NoExpose:
-				minimized = true;
-				break;
+				const WindowData &wd = windows[window_id];
+
+				// Set focus when menu window is started.
+				// RevertToPointerRoot is used to make sure we don't lose all focus in case
+				// a subwindow and its parent are both destroyed.
+				if (wd.menu_type && !wd.no_focus) {
+					XSetInputFocus(x11_display, wd.x11_window, RevertToPointerRoot, CurrentTime);
+				}
+			} break;
+
+			case Expose: {
+				DEBUG_LOG_X11("[%u] Expose window=%lu (%u), count='%u' \n", frame, event.xexpose.window, window_id, event.xexpose.count);
+
+				Main::force_redraw();
+			} break;
+
+			case NoExpose: {
+				DEBUG_LOG_X11("[%u] NoExpose drawable=%lu (%u) \n", frame, event.xnoexpose.drawable, window_id);
+
+				windows[window_id].minimized = true;
+			} break;
 
 			case VisibilityNotify: {
+				DEBUG_LOG_X11("[%u] VisibilityNotify window=%lu (%u), state=%u \n", frame, event.xvisibility.window, window_id, event.xvisibility.state);
+
 				XVisibilityEvent *visibility = (XVisibilityEvent *)&event;
-				minimized = (visibility->state == VisibilityFullyObscured);
+				windows[window_id].minimized = (visibility->state == VisibilityFullyObscured);
 			} break;
+
 			case LeaveNotify: {
+				DEBUG_LOG_X11("[%u] LeaveNotify window=%lu (%u), mode='%u' \n", frame, event.xcrossing.window, window_id, event.xcrossing.mode);
+
 				if (!mouse_mode_grab) {
 					_send_window_event(windows[window_id], WINDOW_EVENT_MOUSE_EXIT);
 				}
 
 			} break;
+
 			case EnterNotify: {
+				DEBUG_LOG_X11("[%u] EnterNotify window=%lu (%u), mode='%u' \n", frame, event.xcrossing.window, window_id, event.xcrossing.mode);
+
 				if (!mouse_mode_grab) {
 					_send_window_event(windows[window_id], WINDOW_EVENT_MOUSE_ENTER);
 				}
 			} break;
-			case FocusIn:
-				minimized = false;
-				window_has_focus = true;
-				_send_window_event(windows[window_id], WINDOW_EVENT_FOCUS_IN);
-				window_focused = true;
+
+			case FocusIn: {
+				DEBUG_LOG_X11("[%u] FocusIn window=%lu (%u), mode='%u' \n", frame, event.xfocus.window, window_id, event.xfocus.mode);
+
+				WindowData &wd = windows[window_id];
+
+				wd.focused = true;
+
+				// Keep track of focus order for overlapping windows.
+				static unsigned int focus_order = 0;
+				wd.focus_order = ++focus_order;
+
+				_send_window_event(wd, WINDOW_EVENT_FOCUS_IN);
 
 				if (mouse_mode_grab) {
 					// Show and update the cursor if confined and the window regained focus.
@@ -2634,16 +2665,27 @@ void DisplayServerX11::process_events() {
 					XIGrabDevice(x11_display, xi.touch_devices[i], x11_window, CurrentTime, None, XIGrabModeAsync, XIGrabModeAsync, False, &xi.touch_event_mask);
 				}*/
 #endif
-				if (windows[window_id].xic) {
-					XSetICFocus(windows[window_id].xic);
+				if (wd.xic) {
+					XSetICFocus(wd.xic);
 				}
-				break;
 
-			case FocusOut:
-				window_has_focus = false;
+				if (!app_focused) {
+					if (OS::get_singleton()->get_main_loop()) {
+						OS::get_singleton()->get_main_loop()->notification(MainLoop::NOTIFICATION_APPLICATION_FOCUS_IN);
+					}
+					app_focused = true;
+				}
+			} break;
+
+			case FocusOut: {
+				DEBUG_LOG_X11("[%u] FocusOut window=%lu (%u), mode='%u' \n", frame, event.xfocus.window, window_id, event.xfocus.mode);
+
+				WindowData &wd = windows[window_id];
+
+				wd.focused = false;
+
 				Input::get_singleton()->release_pressed_events();
-				_send_window_event(windows[window_id], WINDOW_EVENT_FOCUS_OUT);
-				window_focused = false;
+				_send_window_event(wd, WINDOW_EVENT_FOCUS_OUT);
 
 				if (mouse_mode_grab) {
 					for (Map<WindowID, WindowData>::Element *E = windows.front(); E; E = E->next()) {
@@ -2672,14 +2714,26 @@ void DisplayServerX11::process_events() {
 				}
 				xi.state.clear();
 #endif
-				if (windows[window_id].xic) {
-					XSetICFocus(windows[window_id].xic);
+				if (wd.xic) {
+					XSetICFocus(wd.xic);
 				}
-				break;
+			} break;
 
-			case ConfigureNotify:
+			case ConfigureNotify: {
+				DEBUG_LOG_X11("[%u] ConfigureNotify window=%lu (%u), event=%lu, above=%lu, override_redirect=%u \n", frame, event.xconfigure.window, window_id, event.xconfigure.event, event.xconfigure.above, event.xconfigure.override_redirect);
+
+				const WindowData &wd = windows[window_id];
+
+				// Set focus when menu window is re-used.
+				// RevertToPointerRoot is used to make sure we don't lose all focus in case
+				// a subwindow and its parent are both destroyed.
+				if (wd.menu_type && !wd.no_focus) {
+					XSetInputFocus(x11_display, wd.x11_window, RevertToPointerRoot, CurrentTime);
+				}
+
 				_window_changed(&event);
-				break;
+			} break;
+
 			case ButtonPress:
 			case ButtonRelease: {
 				/* exit in case of a mouse button press */
@@ -2706,7 +2760,18 @@ void DisplayServerX11::process_events() {
 
 				mb->set_pressed((event.type == ButtonPress));
 
+				const WindowData &wd = windows[window_id];
+
 				if (event.type == ButtonPress) {
+					DEBUG_LOG_X11("[%u] ButtonPress window=%lu (%u), button_index=%u \n", frame, event.xbutton.window, window_id, mb->get_button_index());
+
+					// Ensure window focus on click.
+					// RevertToPointerRoot is used to make sure we don't lose all focus in case
+					// a subwindow and its parent are both destroyed.
+					if (!wd.no_focus) {
+						XSetInputFocus(x11_display, wd.x11_window, RevertToPointerRoot, CurrentTime);
+					}
+
 					uint64_t diff = OS::get_singleton()->get_ticks_usec() / 1000 - last_click_ms;
 
 					if (mb->get_button_index() == last_click_button_index) {
@@ -2724,6 +2789,33 @@ void DisplayServerX11::process_events() {
 					if (!mb->is_doubleclick()) {
 						last_click_ms += diff;
 						last_click_pos = Point2i(event.xbutton.x, event.xbutton.y);
+					}
+				} else {
+					DEBUG_LOG_X11("[%u] ButtonRelease window=%lu (%u), button_index=%u \n", frame, event.xbutton.window, window_id, mb->get_button_index());
+
+					if (!wd.focused) {
+						// Propagate the event to the focused window,
+						// because it's received only on the topmost window.
+						// Note: This is needed for drag & drop to work between windows,
+						// because the engine expects events to keep being processed
+						// on the same window dragging started.
+						for (Map<WindowID, WindowData>::Element *E = windows.front(); E; E = E->next()) {
+							const WindowData &wd_other = E->get();
+							WindowID window_id_other = E->key();
+							if (wd_other.focused) {
+								if (window_id_other != window_id) {
+									int x, y;
+									Window child;
+									XTranslateCoordinates(x11_display, wd.x11_window, wd_other.x11_window, event.xbutton.x, event.xbutton.y, &x, &y, &child);
+
+									mb->set_window_id(window_id_other);
+									mb->set_position(Vector2(x, y));
+									mb->set_global_position(mb->get_position());
+									Input::get_singleton()->accumulate_input_event(mb);
+								}
+								break;
+							}
+						}
 					}
 				}
 
@@ -2774,6 +2866,9 @@ void DisplayServerX11::process_events() {
 					break;
 				}
 
+				const WindowData &wd = windows[window_id];
+				bool focused = wd.focused;
+
 				if (mouse_mode == MOUSE_MODE_CAPTURED) {
 					if (xi.relative_motion.x == 0 && xi.relative_motion.y == 0) {
 						break;
@@ -2782,7 +2877,7 @@ void DisplayServerX11::process_events() {
 					Point2i new_center = pos;
 					pos = last_mouse_pos + xi.relative_motion;
 					center = new_center;
-					do_mouse_warp = window_has_focus; // warp the cursor if we're focused in
+					do_mouse_warp = focused; // warp the cursor if we're focused in
 				}
 
 				if (!last_mouse_pos_valid) {
@@ -2824,14 +2919,11 @@ void DisplayServerX11::process_events() {
 				}
 				mm->set_tilt(xi.tilt);
 
-				// Make the absolute position integral so it doesn't look _too_ weird :)
-				Point2i posi(pos);
-
 				_get_key_modifier_state(event.xmotion.state, mm);
 				mm->set_button_mask(mouse_get_button_state());
-				mm->set_position(posi);
-				mm->set_global_position(posi);
-				Input::get_singleton()->set_mouse_position(posi);
+				mm->set_position(pos);
+				mm->set_global_position(pos);
+				Input::get_singleton()->set_mouse_position(pos);
 				mm->set_speed(Input::get_singleton()->get_last_mouse_speed());
 
 				mm->set_relative(rel);
@@ -2842,8 +2934,32 @@ void DisplayServerX11::process_events() {
 				// Don't propagate the motion event unless we have focus
 				// this is so that the relative motion doesn't get messed up
 				// after we regain focus.
-				if (window_has_focus || !mouse_mode_grab) {
+				if (focused) {
 					Input::get_singleton()->accumulate_input_event(mm);
+				} else {
+					// Propagate the event to the focused window,
+					// because it's received only on the topmost window.
+					// Note: This is needed for drag & drop to work between windows,
+					// because the engine expects events to keep being processed
+					// on the same window dragging started.
+					for (Map<WindowID, WindowData>::Element *E = windows.front(); E; E = E->next()) {
+						const WindowData &wd_other = E->get();
+						if (wd_other.focused) {
+							int x, y;
+							Window child;
+							XTranslateCoordinates(x11_display, wd.x11_window, wd_other.x11_window, event.xmotion.x, event.xmotion.y, &x, &y, &child);
+
+							Point2i pos_focused(x, y);
+
+							mm->set_window_id(E->key());
+							mm->set_position(pos_focused);
+							mm->set_global_position(pos_focused);
+							mm->set_speed(Input::get_singleton()->get_last_mouse_speed());
+							Input::get_singleton()->accumulate_input_event(mm);
+
+							break;
+						}
+					}
 				}
 
 			} break;
@@ -3192,7 +3308,13 @@ Vector<String> DisplayServerX11::get_rendering_drivers_func() {
 }
 
 DisplayServer *DisplayServerX11::create_func(const String &p_rendering_driver, WindowMode p_mode, uint32_t p_flags, const Vector2i &p_resolution, Error &r_error) {
-	return memnew(DisplayServerX11(p_rendering_driver, p_mode, p_flags, p_resolution, r_error));
+	DisplayServer *ds = memnew(DisplayServerX11(p_rendering_driver, p_mode, p_flags, p_resolution, r_error));
+	if (r_error != OK) {
+		ds->alert("Your video card driver does not support any of the supported Vulkan versions.\n"
+				  "Please update your drivers or if you have a very old or integrated GPU upgrade it.",
+				"Unable to initialize Video driver");
+	}
+	return ds;
 }
 
 DisplayServerX11::WindowID DisplayServerX11::_create_window(WindowMode p_mode, uint32_t p_flags, const Rect2i &p_rect) {
@@ -3214,12 +3336,37 @@ DisplayServerX11::WindowID DisplayServerX11::_create_window(WindowMode p_mode, u
 
 	unsigned long valuemask = CWBorderPixel | CWColormap | CWEventMask;
 
-	WindowID id;
+	WindowID id = window_id_counter++;
+	WindowData &wd = windows[id];
+
+	if ((id != MAIN_WINDOW_ID) && (p_flags & WINDOW_FLAG_BORDERLESS_BIT)) {
+		wd.menu_type = true;
+	}
+
+	if (p_flags & WINDOW_FLAG_NO_FOCUS_BIT) {
+		wd.menu_type = true;
+		wd.no_focus = true;
+	}
+
+	// Setup for menu subwindows:
+	// - override_redirect forces the WM not to interfere with the window, to avoid delays due to
+	//   handling decorations and placement.
+	//   On the other hand, focus changes need to be handled manually when this is set.
+	// - save_under is a hint for the WM to keep the content of windows behind to avoid repaint.
+	if (wd.menu_type) {
+		windowAttributes.override_redirect = True;
+		windowAttributes.save_under = True;
+		valuemask |= CWOverrideRedirect | CWSaveUnder;
+	}
+
 	{
-		WindowData wd;
 		wd.x11_window = XCreateWindow(x11_display, RootWindow(x11_display, visualInfo->screen), p_rect.position.x, p_rect.position.y, p_rect.size.width > 0 ? p_rect.size.width : 1, p_rect.size.height > 0 ? p_rect.size.height : 1, 0, visualInfo->depth, InputOutput, visualInfo->visual, valuemask, &windowAttributes);
 
-		XMapWindow(x11_display, wd.x11_window);
+		// Enable receiving notification when the window is initialized (MapNotify)
+		// so the focus can be set at the right time.
+		if (wd.menu_type && !wd.no_focus) {
+			XSelectInput(x11_display, wd.x11_window, StructureNotifyMask);
+		}
 
 		//associate PID
 		// make PID known to X11
@@ -3295,86 +3442,29 @@ DisplayServerX11::WindowID DisplayServerX11::_create_window(WindowMode p_mode, u
 
 		_update_context(wd);
 
-		id = window_id_counter++;
-
-		windows[id] = wd;
-
-		{
-			if (p_flags & WINDOW_FLAG_RESIZE_DISABLED_BIT) {
-				XSizeHints *xsh;
-				xsh = XAllocSizeHints();
-
-				xsh->flags = PMinSize | PMaxSize;
-				xsh->min_width = p_rect.size.width;
-				xsh->max_width = p_rect.size.width;
-				xsh->min_height = p_rect.size.height;
-				xsh->max_height = p_rect.size.height;
-
-				XSetWMNormalHints(x11_display, wd.x11_window, xsh);
-				XFree(xsh);
-			}
-
-			bool make_utility = false;
-
-			if (p_flags & WINDOW_FLAG_BORDERLESS_BIT) {
-				Hints hints;
-				Atom property;
-				hints.flags = 2;
-				hints.decorations = 0;
-				property = XInternAtom(x11_display, "_MOTIF_WM_HINTS", True);
-				XChangeProperty(x11_display, wd.x11_window, property, property, 32, PropModeReplace, (unsigned char *)&hints, 5);
-
-				make_utility = true;
-			}
-			if (p_flags & WINDOW_FLAG_NO_FOCUS_BIT) {
-				make_utility = true;
-			}
-
-			if (make_utility) {
-				//this one seems to disable the fade animations for regular windows
-				//but has the drawback that will not get focus by default, so
-				//we need fo force it, unless no focus requested
-
-				Atom type_atom = XInternAtom(x11_display, "_NET_WM_WINDOW_TYPE_UTILITY", False);
-				Atom wt_atom = XInternAtom(x11_display, "_NET_WM_WINDOW_TYPE", False);
-
-				XChangeProperty(x11_display, wd.x11_window, wt_atom, XA_ATOM, 32, PropModeReplace, (unsigned char *)&type_atom, 1);
-
-				if (!(p_flags & WINDOW_FLAG_NO_FOCUS_BIT)) {
-					//but as utility appears unfocused, it needs to be forcefuly focused, unless no focus requested
-					XEvent xev;
-					Atom net_active_window = XInternAtom(x11_display, "_NET_ACTIVE_WINDOW", False);
-
-					memset(&xev, 0, sizeof(xev));
-					xev.type = ClientMessage;
-					xev.xclient.window = wd.x11_window;
-					xev.xclient.message_type = net_active_window;
-					xev.xclient.format = 32;
-					xev.xclient.data.l[0] = 1;
-					xev.xclient.data.l[1] = CurrentTime;
-
-					XSendEvent(x11_display, DefaultRootWindow(x11_display), False, SubstructureRedirectMask | SubstructureNotifyMask, &xev);
-				}
-			} else {
-				Atom type_atom = XInternAtom(x11_display, "_NET_WM_WINDOW_TYPE_NORMAL", False);
-				Atom wt_atom = XInternAtom(x11_display, "_NET_WM_WINDOW_TYPE", False);
-
-				XChangeProperty(x11_display, wd.x11_window, wt_atom, XA_ATOM, 32, PropModeReplace, (unsigned char *)&type_atom, 1);
-			}
+		if (p_flags & WINDOW_FLAG_BORDERLESS_BIT) {
+			Hints hints;
+			Atom property;
+			hints.flags = 2;
+			hints.decorations = 0;
+			property = XInternAtom(x11_display, "_MOTIF_WM_HINTS", True);
+			XChangeProperty(x11_display, wd.x11_window, property, property, 32, PropModeReplace, (unsigned char *)&hints, 5);
 		}
 
-		if (id != MAIN_WINDOW_ID) {
-			XSizeHints my_hints = XSizeHints();
+		if (wd.menu_type) {
+			// Set Utility type to disable fade animations.
+			Atom type_atom = XInternAtom(x11_display, "_NET_WM_WINDOW_TYPE_UTILITY", False);
+			Atom wt_atom = XInternAtom(x11_display, "_NET_WM_WINDOW_TYPE", False);
 
-			my_hints.flags = PPosition | PSize; /* I want to specify position and size */
-			my_hints.x = p_rect.position.x; /* The origin and size coords I want */
-			my_hints.y = p_rect.position.y;
-			my_hints.width = p_rect.size.width;
-			my_hints.height = p_rect.size.height;
+			XChangeProperty(x11_display, wd.x11_window, wt_atom, XA_ATOM, 32, PropModeReplace, (unsigned char *)&type_atom, 1);
+		} else {
+			Atom type_atom = XInternAtom(x11_display, "_NET_WM_WINDOW_TYPE_NORMAL", False);
+			Atom wt_atom = XInternAtom(x11_display, "_NET_WM_WINDOW_TYPE", False);
 
-			XSetNormalHints(x11_display, wd.x11_window, &my_hints);
-			XMoveWindow(x11_display, wd.x11_window, p_rect.position.x, p_rect.position.y);
+			XChangeProperty(x11_display, wd.x11_window, wt_atom, XA_ATOM, 32, PropModeReplace, (unsigned char *)&type_atom, 1);
 		}
+
+		_update_size_hints(id);
 
 #if defined(VULKAN_ENABLED)
 		if (context_vulkan) {
@@ -3391,8 +3481,6 @@ DisplayServerX11::WindowID DisplayServerX11::_create_window(WindowMode p_mode, u
 
 		XFree(visualInfo);
 	}
-
-	WindowData &wd = windows[id];
 
 	window_set_mode(p_mode, id);
 
@@ -3415,6 +3503,7 @@ DisplayServerX11::WindowID DisplayServerX11::_create_window(WindowMode p_mode, u
 	if (cursors[current_cursor] != None) {
 		XDefineCursor(x11_display, wd.x11_window, cursors[current_cursor]);
 	}
+
 	return id;
 }
 
@@ -3486,7 +3575,12 @@ DisplayServerX11::DisplayServerX11(const String &p_rendering_driver, WindowMode 
 	xrandr_handle = dlopen("libXrandr.so.2", RTLD_LAZY);
 	if (!xrandr_handle) {
 		err = dlerror();
-		fprintf(stderr, "could not load libXrandr.so.2, Error: %s\n", err);
+		// For some arcane reason, NetBSD now ships libXrandr.so.3 while the rest of the world has libXrandr.so.2...
+		// In case this happens for other X11 platforms in the future, let's give it a try too before failing.
+		xrandr_handle = dlopen("libXrandr.so.3", RTLD_LAZY);
+		if (!xrandr_handle) {
+			fprintf(stderr, "could not load libXrandr.so.2, Error: %s\n", err);
+		}
 	} else {
 		XRRQueryVersion(x11_display, &xrandr_major, &xrandr_minor);
 		if (((xrandr_major << 8) | xrandr_minor) >= 0x0105) {
@@ -3654,6 +3748,7 @@ DisplayServerX11::DisplayServerX11(const String &p_rendering_driver, WindowMode 
 			window_set_flag(WindowFlags(i), true, main_window);
 		}
 	}
+	show_window(main_window);
 
 //create RenderingDevice if used
 #if defined(VULKAN_ENABLED)
@@ -3818,8 +3913,6 @@ DisplayServerX11::DisplayServerX11(const String &p_rendering_driver, WindowMode 
 	cursor_set_shape(CURSOR_BUSY);
 
 	requested = None;
-
-	window_has_focus = true; // Set focus to true at init
 
 	/*if (p_desired.layered) {
 		set_window_per_pixel_transparency_enabled(true);

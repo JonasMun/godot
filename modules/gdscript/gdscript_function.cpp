@@ -34,6 +34,10 @@
 #include "gdscript.h"
 #include "gdscript_functions.h"
 
+#ifdef DEBUG_ENABLED
+#include "core/string_builder.h"
+#endif
+
 Variant *GDScriptFunction::_get_variant(int p_address, GDScriptInstance *p_instance, GDScript *p_script, Variant &self, Variant &static_ref, Variant *p_stack, String &r_error) const {
 	int address = p_address & ADDR_MASK;
 
@@ -105,9 +109,9 @@ Variant *GDScriptFunction::_get_variant(int p_address, GDScriptInstance *p_insta
 #ifdef TOOLS_ENABLED
 		case ADDR_TYPE_NAMED_GLOBAL: {
 #ifdef DEBUG_ENABLED
-			ERR_FAIL_INDEX_V(address, _named_globals_count, nullptr);
+			ERR_FAIL_INDEX_V(address, _global_names_count, nullptr);
 #endif
-			StringName id = _named_globals_ptr[address];
+			StringName id = _global_names_ptr[address];
 
 			if (GDScriptLanguage::get_singleton()->get_named_globals_map().has(id)) {
 				return (Variant *)&GDScriptLanguage::get_singleton()->get_named_globals_map()[id];
@@ -210,12 +214,11 @@ String GDScriptFunction::_get_call_error(const Callable::CallError &p_err, const
 		&&OPCODE_CONSTRUCT_DICTIONARY,        \
 		&&OPCODE_CALL,                        \
 		&&OPCODE_CALL_RETURN,                 \
+		&&OPCODE_CALL_ASYNC,                  \
 		&&OPCODE_CALL_BUILT_IN,               \
-		&&OPCODE_CALL_SELF,                   \
 		&&OPCODE_CALL_SELF_BASE,              \
-		&&OPCODE_YIELD,                       \
-		&&OPCODE_YIELD_SIGNAL,                \
-		&&OPCODE_YIELD_RESUME,                \
+		&&OPCODE_AWAIT,                       \
+		&&OPCODE_AWAIT_RESUME,                \
 		&&OPCODE_JUMP,                        \
 		&&OPCODE_JUMP_IF,                     \
 		&&OPCODE_JUMP_IF_NOT,                 \
@@ -227,7 +230,8 @@ String GDScriptFunction::_get_call_error(const Callable::CallError &p_err, const
 		&&OPCODE_BREAKPOINT,                  \
 		&&OPCODE_LINE,                        \
 		&&OPCODE_END                          \
-	};
+	};                                        \
+	static_assert((sizeof(switch_table_ops) / sizeof(switch_table_ops[0]) == (OPCODE_END + 1)), "Opcodes in jump table aren't the same as opcodes in enum.");
 
 #define OPCODE(m_op) \
 	m_op:
@@ -280,7 +284,7 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 	int line = _initial_line;
 
 	if (p_state) {
-		//use existing (supplied) state (yielded)
+		//use existing (supplied) state (awaited)
 		stack = (Variant *)p_state->stack.ptr();
 		call_args = (Variant **)&p_state->stack.ptr()[sizeof(Variant) * p_state->stack_size]; //ptr() to avoid bounds check
 		line = p_state->line;
@@ -411,7 +415,7 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 		profile.frame_call_count++;
 	}
 	bool exit_ok = false;
-	bool yielded = false;
+	bool awaited = false;
 #endif
 
 #ifdef DEBUG_ENABLED
@@ -1006,10 +1010,14 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 			}
 			DISPATCH_OPCODE;
 
+			OPCODE(OPCODE_CALL_ASYNC)
 			OPCODE(OPCODE_CALL_RETURN)
 			OPCODE(OPCODE_CALL) {
 				CHECK_SPACE(4);
-				bool call_ret = _code_ptr[ip] == OPCODE_CALL_RETURN;
+				bool call_ret = _code_ptr[ip] != OPCODE_CALL;
+#ifdef DEBUG_ENABLED
+				bool call_async = _code_ptr[ip] == OPCODE_CALL_ASYNC;
+#endif
 
 				int argc = _code_ptr[ip + 1];
 				GET_VARIANT_PTR(base, 2);
@@ -1040,6 +1048,22 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 				if (call_ret) {
 					GET_VARIANT_PTR(ret, argc);
 					base->call_ptr(*methodname, (const Variant **)argptrs, argc, ret, err);
+#ifdef DEBUG_ENABLED
+					if (!call_async && ret->get_type() == Variant::OBJECT) {
+						// Check if getting a function state without await.
+						bool was_freed = false;
+						Object *obj = ret->get_validated_object_with_check(was_freed);
+
+						if (was_freed) {
+							err_text = "Got a freed object as a result of the call.";
+							OPCODE_BREAK;
+						}
+						if (obj && obj->is_class_ptr(GDScriptFunctionState::get_class_ptr_static())) {
+							err_text = R"(Trying to call an async function without "await".)";
+							OPCODE_BREAK;
+						}
+					}
+#endif
 				} else {
 					base->call_ptr(*methodname, (const Variant **)argptrs, argc, nullptr, err);
 				}
@@ -1118,10 +1142,6 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 			}
 			DISPATCH_OPCODE;
 
-			OPCODE(OPCODE_CALL_SELF) {
-				OPCODE_BREAK;
-			}
-
 			OPCODE(OPCODE_CALL_SELF_BASE) {
 				CHECK_SPACE(2);
 				int self_fun = _code_ptr[ip + 1];
@@ -1192,105 +1212,95 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 			}
 			DISPATCH_OPCODE;
 
-			OPCODE(OPCODE_YIELD)
-			OPCODE(OPCODE_YIELD_SIGNAL) {
-				int ipofs = 1;
-				if (_code_ptr[ip] == OPCODE_YIELD_SIGNAL) {
-					CHECK_SPACE(4);
-					ipofs += 2;
-				} else {
-					CHECK_SPACE(2);
-				}
+			OPCODE(OPCODE_AWAIT) {
+				CHECK_SPACE(2);
 
-				Ref<GDScriptFunctionState> gdfs = memnew(GDScriptFunctionState);
-				gdfs->function = this;
+				//do the oneshot connect
+				GET_VARIANT_PTR(argobj, 1);
 
-				gdfs->state.stack.resize(alloca_size);
-				//copy variant stack
-				for (int i = 0; i < _stack_size; i++) {
-					memnew_placement(&gdfs->state.stack.write[sizeof(Variant) * i], Variant(stack[i]));
-				}
-				gdfs->state.stack_size = _stack_size;
-				gdfs->state.self = self;
-				gdfs->state.alloca_size = alloca_size;
-				gdfs->state.ip = ip + ipofs;
-				gdfs->state.line = line;
-				gdfs->state.script = _script;
+				Signal sig;
+				bool is_signal = true;
+
 				{
-					MutexLock lock(GDScriptLanguage::get_singleton()->lock);
-					_script->pending_func_states.add(&gdfs->scripts_list);
-					if (p_instance) {
-						gdfs->state.instance = p_instance;
-						p_instance->pending_func_states.add(&gdfs->instances_list);
+					Variant result = *argobj;
+
+					if (argobj->get_type() == Variant::OBJECT) {
+						bool was_freed = false;
+						Object *obj = argobj->get_validated_object_with_check(was_freed);
+
+						if (was_freed) {
+							err_text = "Trying to await on a freed object.";
+							OPCODE_BREAK;
+						}
+
+						// Is this even possible to be null at this point?
+						if (obj) {
+							if (obj->is_class_ptr(GDScriptFunctionState::get_class_ptr_static())) {
+								static StringName completed = _scs_create("completed");
+								result = Signal(obj, completed);
+							}
+						}
+					}
+
+					if (result.get_type() != Variant::SIGNAL) {
+						ip += 4; // Skip OPCODE_AWAIT_RESUME and its data.
+						// The stack pointer should be the same, so we don't need to set a return value.
+						is_signal = false;
 					} else {
-						gdfs->state.instance = nullptr;
+						sig = result;
 					}
 				}
+
+				if (is_signal) {
+					Ref<GDScriptFunctionState> gdfs = memnew(GDScriptFunctionState);
+					gdfs->function = this;
+
+					gdfs->state.stack.resize(alloca_size);
+					//copy variant stack
+					for (int i = 0; i < _stack_size; i++) {
+						memnew_placement(&gdfs->state.stack.write[sizeof(Variant) * i], Variant(stack[i]));
+					}
+					gdfs->state.stack_size = _stack_size;
+					gdfs->state.self = self;
+					gdfs->state.alloca_size = alloca_size;
+					gdfs->state.ip = ip + 2;
+					gdfs->state.line = line;
+					gdfs->state.script = _script;
+					{
+						MutexLock lock(GDScriptLanguage::get_singleton()->lock);
+						_script->pending_func_states.add(&gdfs->scripts_list);
+						if (p_instance) {
+							gdfs->state.instance = p_instance;
+							p_instance->pending_func_states.add(&gdfs->instances_list);
+						} else {
+							gdfs->state.instance = nullptr;
+						}
+					}
 #ifdef DEBUG_ENABLED
-				gdfs->state.function_name = name;
-				gdfs->state.script_path = _script->get_path();
+					gdfs->state.function_name = name;
+					gdfs->state.script_path = _script->get_path();
 #endif
-				gdfs->state.defarg = defarg;
-				gdfs->function = this;
+					gdfs->state.defarg = defarg;
+					gdfs->function = this;
 
-				retvalue = gdfs;
+					retvalue = gdfs;
 
-				if (_code_ptr[ip] == OPCODE_YIELD_SIGNAL) {
-					//do the oneshot connect
-					GET_VARIANT_PTR(argobj, 1);
-					GET_VARIANT_PTR(argname, 2);
-
-#ifdef DEBUG_ENABLED
-					if (argobj->get_type() != Variant::OBJECT) {
-						err_text = "First argument of yield() not of type object.";
-						OPCODE_BREAK;
-					}
-					if (argname->get_type() != Variant::STRING) {
-						err_text = "Second argument of yield() not a string (for signal name).";
-						OPCODE_BREAK;
-					}
-#endif
-
-#ifdef DEBUG_ENABLED
-					bool was_freed;
-					Object *obj = argobj->get_validated_object_with_check(was_freed);
-					String signal = argname->operator String();
-
-					if (was_freed) {
-						err_text = "First argument of yield() is a previously freed instance.";
-						OPCODE_BREAK;
-					}
-
-					if (!obj) {
-						err_text = "First argument of yield() is null.";
-						OPCODE_BREAK;
-					}
-					if (signal.length() == 0) {
-						err_text = "Second argument of yield() is an empty string (for signal name).";
-						OPCODE_BREAK;
-					}
-
-					Error err = obj->connect_compat(signal, gdfs.ptr(), "_signal_callback", varray(gdfs), Object::CONNECT_ONESHOT);
+					Error err = sig.connect(Callable(gdfs.ptr(), "_signal_callback"), varray(gdfs), Object::CONNECT_ONESHOT);
 					if (err != OK) {
-						err_text = "Error connecting to signal: " + signal + " during yield().";
+						err_text = "Error connecting to signal: " + sig.get_name() + " during await.";
 						OPCODE_BREAK;
 					}
-#else
-					Object *obj = argobj->operator Object *();
-					String signal = argname->operator String();
-
-					obj->connect_compat(signal, gdfs.ptr(), "_signal_callback", varray(gdfs), Object::CONNECT_ONESHOT);
-#endif
-				}
 
 #ifdef DEBUG_ENABLED
-				exit_ok = true;
-				yielded = true;
+					exit_ok = true;
+					awaited = true;
 #endif
-				OPCODE_BREAK;
+					OPCODE_BREAK;
+				}
 			}
+			DISPATCH_OPCODE; // Needed for synchronous calls (when result is immediately available).
 
-			OPCODE(OPCODE_YIELD_RESUME) {
+			OPCODE(OPCODE_AWAIT_RESUME) {
 				CHECK_SPACE(2);
 #ifdef DEBUG_ENABLED
 				if (!p_state) {
@@ -1556,11 +1566,11 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 		GDScriptLanguage::get_singleton()->script_frame_time += time_taken - function_call_time;
 	}
 
-	// Check if this is the last time the function is resuming from yield
-	// Will be true if never yielded as well
+	// Check if this is the last time the function is resuming from await
+	// Will be true if never awaited as well
 	// When it's the last resume it will postpone the exit from stack,
 	// so the debugger knows which function triggered the resume of the next function (if any)
-	if (!p_state || yielded) {
+	if (!p_state || awaited) {
 		if (EngineDebugger::is_active()) {
 			GDScriptLanguage::get_singleton()->exit_function();
 		}
@@ -1786,14 +1796,14 @@ Variant GDScriptFunctionState::resume(const Variant &p_arg) {
 
 		if (!scripts_list.in_list()) {
 #ifdef DEBUG_ENABLED
-			ERR_FAIL_V_MSG(Variant(), "Resumed function '" + state.function_name + "()' after yield, but script is gone. At script: " + state.script_path + ":" + itos(state.line));
+			ERR_FAIL_V_MSG(Variant(), "Resumed function '" + state.function_name + "()' after await, but script is gone. At script: " + state.script_path + ":" + itos(state.line));
 #else
 			return Variant();
 #endif
 		}
 		if (state.instance && !instances_list.in_list()) {
 #ifdef DEBUG_ENABLED
-			ERR_FAIL_V_MSG(Variant(), "Resumed function '" + state.function_name + "()' after yield, but class instance is gone. At script: " + state.script_path + ":" + itos(state.line));
+			ERR_FAIL_V_MSG(Variant(), "Resumed function '" + state.function_name + "()' after await, but class instance is gone. At script: " + state.script_path + ":" + itos(state.line));
 #else
 			return Variant();
 #endif
@@ -1810,7 +1820,7 @@ Variant GDScriptFunctionState::resume(const Variant &p_arg) {
 	bool completed = true;
 
 	// If the return value is a GDScriptFunctionState reference,
-	// then the function did yield again after resuming.
+	// then the function did awaited again after resuming.
 	if (ret.is_ref()) {
 		GDScriptFunctionState *gdfs = Object::cast_to<GDScriptFunctionState>(ret);
 		if (gdfs && gdfs->function == function) {
@@ -1872,3 +1882,506 @@ GDScriptFunctionState::~GDScriptFunctionState() {
 		instances_list.remove_from_list();
 	}
 }
+
+#ifdef DEBUG_ENABLED
+static String _get_variant_string(const Variant &p_variant) {
+	String txt;
+	if (p_variant.get_type() == Variant::STRING) {
+		txt = "\"" + String(p_variant) + "\"";
+	} else if (p_variant.get_type() == Variant::STRING_NAME) {
+		txt = "&\"" + String(p_variant) + "\"";
+	} else if (p_variant.get_type() == Variant::NODE_PATH) {
+		txt = "^\"" + String(p_variant) + "\"";
+	} else if (p_variant.get_type() == Variant::OBJECT) {
+		Object *obj = p_variant;
+		if (!obj) {
+			txt = "null";
+		} else {
+			GDScriptNativeClass *cls = Object::cast_to<GDScriptNativeClass>(obj);
+			if (cls) {
+				txt += cls->get_name();
+				txt += " (class)";
+			} else {
+				txt = obj->get_class();
+				if (obj->get_script_instance()) {
+					txt += "(" + obj->get_script_instance()->get_script()->get_path() + ")";
+				}
+			}
+		}
+	} else {
+		txt = p_variant;
+	}
+	return txt;
+}
+
+static String _disassemble_address(const GDScript *p_script, const GDScriptFunction &p_function, int p_address) {
+	int addr = p_address & GDScriptFunction::ADDR_MASK;
+
+	switch (p_address >> GDScriptFunction::ADDR_BITS) {
+		case GDScriptFunction::ADDR_TYPE_SELF: {
+			return "self";
+		} break;
+		case GDScriptFunction::ADDR_TYPE_CLASS: {
+			return "class";
+		} break;
+		case GDScriptFunction::ADDR_TYPE_MEMBER: {
+			return "member(" + p_script->debug_get_member_by_index(addr) + ")";
+		} break;
+		case GDScriptFunction::ADDR_TYPE_CLASS_CONSTANT: {
+			return "class_const(" + p_function.get_global_name(addr) + ")";
+		} break;
+		case GDScriptFunction::ADDR_TYPE_LOCAL_CONSTANT: {
+			return "const(" + _get_variant_string(p_function.get_constant(addr)) + ")";
+		} break;
+		case GDScriptFunction::ADDR_TYPE_STACK: {
+			return "stack(" + itos(addr) + ")";
+		} break;
+		case GDScriptFunction::ADDR_TYPE_STACK_VARIABLE: {
+			return "var_stack(" + itos(addr) + ")";
+		} break;
+		case GDScriptFunction::ADDR_TYPE_GLOBAL: {
+			return "global(" + _get_variant_string(GDScriptLanguage::get_singleton()->get_global_array()[addr]) + ")";
+		} break;
+		case GDScriptFunction::ADDR_TYPE_NAMED_GLOBAL: {
+			return "named_global(" + p_function.get_global_name(addr) + ")";
+		} break;
+		case GDScriptFunction::ADDR_TYPE_NIL: {
+			return "nil";
+		} break;
+	}
+
+	return "<err>";
+}
+
+void GDScriptFunction::disassemble(const Vector<String> &p_code_lines) const {
+#define DADDR(m_ip) (_disassemble_address(_script, *this, _code_ptr[ip + m_ip]))
+
+	for (int ip = 0; ip < _code_size;) {
+		StringBuilder text;
+		int incr = 0;
+
+		text += " ";
+		text += itos(ip);
+		text += ": ";
+
+		// This makes the compiler complain if some opcode is unchecked in the switch.
+		Opcode code = Opcode(_code_ptr[ip]);
+
+		switch (code) {
+			case OPCODE_OPERATOR: {
+				int operation = _code_ptr[ip + 1];
+
+				text += "operator ";
+
+				text += DADDR(4);
+				text += " = ";
+				text += DADDR(2);
+				text += " ";
+				text += Variant::get_operator_name(Variant::Operator(operation));
+				text += " ";
+				text += DADDR(3);
+
+				incr += 5;
+			} break;
+			case OPCODE_EXTENDS_TEST: {
+				text += "is object ";
+				text += DADDR(3);
+				text += " = ";
+				text += DADDR(1);
+				text += " is ";
+				text += DADDR(2);
+
+				incr += 4;
+			} break;
+			case OPCODE_IS_BUILTIN: {
+				text += "is builtin ";
+				text += DADDR(3);
+				text += " = ";
+				text += DADDR(1);
+				text += " is ";
+				text += Variant::get_type_name(Variant::Type(_code_ptr[ip + 2]));
+
+				incr += 4;
+			} break;
+			case OPCODE_SET: {
+				text += "set ";
+				text += DADDR(1);
+				text += "[";
+				text += DADDR(2);
+				text += "] = ";
+				text += DADDR(3);
+
+				incr += 4;
+			} break;
+			case OPCODE_GET: {
+				text += "get ";
+				text += DADDR(3);
+				text += " = ";
+				text += DADDR(1);
+				text += "[";
+				text += DADDR(2);
+				text += "]";
+
+				incr += 4;
+			} break;
+			case OPCODE_SET_NAMED: {
+				text += "set_named ";
+				text += DADDR(1);
+				text += "[\"";
+				text += _global_names_ptr[_code_ptr[ip + 2]];
+				text += "\"] = ";
+				text += DADDR(3);
+
+				incr += 4;
+			} break;
+			case OPCODE_GET_NAMED: {
+				text += "get_named ";
+				text += DADDR(3);
+				text += " = ";
+				text += DADDR(1);
+				text += "[\"";
+				text += _global_names_ptr[_code_ptr[ip + 2]];
+				text += "\"]";
+
+				incr += 4;
+			} break;
+			case OPCODE_SET_MEMBER: {
+				text += "set_member ";
+				text += "[\"";
+				text += _global_names_ptr[_code_ptr[ip + 1]];
+				text += "\"] = ";
+				text += DADDR(2);
+
+				incr += 3;
+			} break;
+			case OPCODE_GET_MEMBER: {
+				text += "get_member ";
+				text += DADDR(2);
+				text += " = ";
+				text += "[\"";
+				text += _global_names_ptr[_code_ptr[ip + 1]];
+				text += "\"]";
+
+				incr += 3;
+			} break;
+			case OPCODE_ASSIGN: {
+				text += "assign ";
+				text += DADDR(1);
+				text += " = ";
+				text += DADDR(2);
+
+				incr += 3;
+			} break;
+			case OPCODE_ASSIGN_TRUE: {
+				text += "assign ";
+				text += DADDR(1);
+				text += " = true";
+
+				incr += 2;
+			} break;
+			case OPCODE_ASSIGN_FALSE: {
+				text += "assign ";
+				text += DADDR(1);
+				text += " = false";
+
+				incr += 2;
+			} break;
+			case OPCODE_ASSIGN_TYPED_BUILTIN: {
+				text += "assign typed builtin (";
+				text += Variant::get_type_name((Variant::Type)_code_ptr[ip + 1]);
+				text += ") ";
+				text += DADDR(2);
+				text += " = ";
+				text += DADDR(3);
+
+				incr += 4;
+			} break;
+			case OPCODE_ASSIGN_TYPED_NATIVE: {
+				Variant class_name = _constants_ptr[_code_ptr[ip + 1]];
+				GDScriptNativeClass *nc = Object::cast_to<GDScriptNativeClass>(class_name.operator Object *());
+
+				text += "assign typed native (";
+				text += nc->get_name().operator String();
+				text += ") ";
+				text += DADDR(2);
+				text += " = ";
+				text += DADDR(3);
+
+				incr += 4;
+			} break;
+			case OPCODE_ASSIGN_TYPED_SCRIPT: {
+				Variant script = _constants_ptr[_code_ptr[ip + 1]];
+				Script *sc = Object::cast_to<Script>(script.operator Object *());
+
+				text += "assign typed script (";
+				text += sc->get_path();
+				text += ") ";
+				text += DADDR(2);
+				text += " = ";
+				text += DADDR(3);
+
+				incr += 4;
+			} break;
+			case OPCODE_CAST_TO_BUILTIN: {
+				text += "cast builtin ";
+				text += DADDR(3);
+				text += " = ";
+				text += DADDR(2);
+				text += " as ";
+				text += Variant::get_type_name(Variant::Type(_code_ptr[ip + 1]));
+
+				incr += 4;
+			} break;
+			case OPCODE_CAST_TO_NATIVE: {
+				Variant class_name = _constants_ptr[_code_ptr[ip + 1]];
+				GDScriptNativeClass *nc = Object::cast_to<GDScriptNativeClass>(class_name.operator Object *());
+
+				text += "cast native ";
+				text += DADDR(3);
+				text += " = ";
+				text += DADDR(2);
+				text += " as ";
+				text += nc->get_name();
+
+				incr += 4;
+			} break;
+			case OPCODE_CAST_TO_SCRIPT: {
+				text += "cast ";
+				text += DADDR(3);
+				text += " = ";
+				text += DADDR(2);
+				text += " as ";
+				text += DADDR(1);
+
+				incr += 4;
+			} break;
+			case OPCODE_CONSTRUCT: {
+				Variant::Type t = Variant::Type(_code_ptr[ip + 1]);
+				int argc = _code_ptr[ip + 2];
+
+				text += "construct ";
+				text += DADDR(3 + argc);
+				text += " = ";
+
+				text += Variant::get_type_name(t) + "(";
+				for (int i = 0; i < argc; i++) {
+					if (i > 0)
+						text += ", ";
+					text += DADDR(i + 3);
+				}
+				text += ")";
+
+				incr = 4 + argc;
+			} break;
+			case OPCODE_CONSTRUCT_ARRAY: {
+				int argc = _code_ptr[ip + 1];
+				text += " make_array ";
+				text += DADDR(2 + argc);
+				text += " = [";
+
+				for (int i = 0; i < argc; i++) {
+					if (i > 0)
+						text += ", ";
+					text += DADDR(2 + i);
+				}
+
+				text += "]";
+
+				incr += 3 + argc;
+			} break;
+			case OPCODE_CONSTRUCT_DICTIONARY: {
+				int argc = _code_ptr[ip + 1];
+				text += "make_dict ";
+				text += DADDR(2 + argc * 2);
+				text += " = {";
+
+				for (int i = 0; i < argc; i++) {
+					if (i > 0)
+						text += ", ";
+					text += DADDR(2 + i * 2 + 0);
+					text += ": ";
+					text += DADDR(2 + i * 2 + 1);
+				}
+
+				text += "}";
+
+				incr += 3 + argc * 2;
+			} break;
+			case OPCODE_CALL:
+			case OPCODE_CALL_RETURN:
+			case OPCODE_CALL_ASYNC: {
+				bool ret = _code_ptr[ip] == OPCODE_CALL_RETURN;
+				bool async = _code_ptr[ip] == OPCODE_CALL_ASYNC;
+
+				if (ret) {
+					text += "call-ret ";
+				} else if (async) {
+					text += "call-async ";
+				} else {
+					text += "call ";
+				}
+
+				int argc = _code_ptr[ip + 1];
+				if (ret || async) {
+					text += DADDR(4 + argc) + " = ";
+				}
+
+				text += DADDR(2) + ".";
+				text += String(_global_names_ptr[_code_ptr[ip + 3]]);
+				text += "(";
+
+				for (int i = 0; i < argc; i++) {
+					if (i > 0)
+						text += ", ";
+					text += DADDR(4 + i);
+				}
+				text += ")";
+
+				incr = 5 + argc;
+			} break;
+			case OPCODE_CALL_BUILT_IN: {
+				text += "call-built-in ";
+
+				int argc = _code_ptr[ip + 2];
+				text += DADDR(3 + argc) + " = ";
+
+				text += GDScriptFunctions::get_func_name(GDScriptFunctions::Function(_code_ptr[ip + 1]));
+				text += "(";
+
+				for (int i = 0; i < argc; i++) {
+					if (i > 0)
+						text += ", ";
+					text += DADDR(3 + i);
+				}
+				text += ")";
+
+				incr = 4 + argc;
+			} break;
+			case OPCODE_CALL_SELF_BASE: {
+				text += "call-self-base ";
+
+				int argc = _code_ptr[ip + 2];
+				text += DADDR(3 + argc) + " = ";
+
+				text += _global_names_ptr[_code_ptr[ip + 1]];
+				text += "(";
+
+				for (int i = 0; i < argc; i++) {
+					if (i > 0)
+						text += ", ";
+					text += DADDR(3 + i);
+				}
+				text += ")";
+
+				incr = 4 + argc;
+			} break;
+			case OPCODE_AWAIT: {
+				text += "await ";
+				text += DADDR(1);
+
+				incr += 2;
+			} break;
+			case OPCODE_AWAIT_RESUME: {
+				text += "await resume ";
+				text += DADDR(1);
+
+				incr = 2;
+			} break;
+			case OPCODE_JUMP: {
+				text += "jump ";
+				text += itos(_code_ptr[ip + 1]);
+
+				incr = 2;
+			} break;
+			case OPCODE_JUMP_IF: {
+				text += "jump-if ";
+				text += DADDR(1);
+				text += " to ";
+				text += itos(_code_ptr[ip + 2]);
+
+				incr = 3;
+			} break;
+			case OPCODE_JUMP_IF_NOT: {
+				text += "jump-if-not ";
+				text += DADDR(1);
+				text += " to ";
+				text += itos(_code_ptr[ip + 2]);
+
+				incr = 3;
+			} break;
+			case OPCODE_JUMP_TO_DEF_ARGUMENT: {
+				text += "jump-to-default-argument ";
+
+				incr = 1;
+			} break;
+			case OPCODE_RETURN: {
+				text += "return ";
+				text += DADDR(1);
+
+				incr = 2;
+			} break;
+			case OPCODE_ITERATE_BEGIN: {
+				text += "for-init ";
+				text += DADDR(4);
+				text += " in ";
+				text += DADDR(2);
+				text += " counter ";
+				text += DADDR(1);
+				text += " end ";
+				text += itos(_code_ptr[ip + 3]);
+
+				incr += 5;
+			} break;
+			case OPCODE_ITERATE: {
+				text += "for-loop ";
+				text += DADDR(4);
+				text += " in ";
+				text += DADDR(2);
+				text += " counter ";
+				text += DADDR(1);
+				text += " end ";
+				text += itos(_code_ptr[ip + 3]);
+
+				incr += 5;
+			} break;
+			case OPCODE_LINE: {
+				int line = _code_ptr[ip + 1] - 1;
+				if (line >= 0 && line < p_code_lines.size()) {
+					text += "line ";
+					text += itos(line + 1);
+					text += ": ";
+					text += p_code_lines[line];
+				} else {
+					text += "";
+				}
+
+				incr += 2;
+			} break;
+			case OPCODE_ASSERT: {
+				text += "assert (";
+				text += DADDR(1);
+				text += ", ";
+				text += DADDR(2);
+				text += ")";
+
+				incr += 3;
+			} break;
+			case OPCODE_BREAKPOINT: {
+				text += "breakpoint";
+
+				incr += 1;
+			} break;
+			case OPCODE_END: {
+				text += "== END ==";
+
+				incr += 1;
+			} break;
+		}
+
+		ip += incr;
+		if (text.get_string_length() > 0) {
+			print_line(text.as_string());
+		}
+	}
+}
+#endif

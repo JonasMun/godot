@@ -780,7 +780,7 @@ void TextureRegionEditor::_notification(int p_what) {
 				_update_autoslice();
 			}
 		} break;
-		case NOTIFICATION_WM_FOCUS_IN: {
+		case NOTIFICATION_WM_WINDOW_FOCUS_IN: {
 			// This happens when the user leaves the Editor and returns,
 			// they could have changed the textures, so the cache is cleared.
 			cache_map.clear();
@@ -875,7 +875,7 @@ void TextureRegionEditor::_changed_callback(Object *p_changed, const char *p_pro
 	if (!is_visible()) {
 		return;
 	}
-	if (p_prop == StringName("atlas") || p_prop == StringName("texture")) {
+	if (p_prop == StringName("atlas") || p_prop == StringName("texture") || p_prop == StringName("region")) {
 		_edit_region();
 	}
 }

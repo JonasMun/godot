@@ -35,6 +35,8 @@
 #include "core/safe_refcount.h"
 #include "core/ustring.h"
 
+class Main;
+
 struct StaticCString {
 	const char *ptr;
 	static StaticCString create(const char *p_ptr);
@@ -73,7 +75,7 @@ class StringName {
 	void unref();
 	friend void register_core_types();
 	friend void unregister_core_types();
-
+	friend class Main;
 	static Mutex mutex;
 	static void setup();
 	static void cleanup();
@@ -120,7 +122,7 @@ public:
 	}
 
 	static StringName search(const char *p_name);
-	static StringName search(const CharType *p_name);
+	static StringName search(const char32_t *p_name);
 	static StringName search(const String &p_name);
 
 	struct AlphCompare {

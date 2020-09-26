@@ -64,6 +64,7 @@ private:
 	bool local_coords;
 	int fixed_fps;
 	bool fractional_delta;
+	NodePath sub_emitter;
 
 	Ref<Material> process_material;
 
@@ -71,14 +72,16 @@ private:
 
 	Vector<Ref<Mesh>> draw_passes;
 
+	void _attach_sub_emitter();
+
 protected:
 	static void _bind_methods();
 	void _notification(int p_what);
-	virtual void _validate_property(PropertyInfo &property) const;
+	virtual void _validate_property(PropertyInfo &property) const override;
 
 public:
-	AABB get_aabb() const;
-	Vector<Face3> get_faces(uint32_t p_usage_flags) const;
+	AABB get_aabb() const override;
+	Vector<Face3> get_faces(uint32_t p_usage_flags) const override;
 
 	void set_emitting(bool p_emitting);
 	void set_amount(int p_amount);
@@ -119,9 +122,22 @@ public:
 	void set_draw_pass_mesh(int p_pass, const Ref<Mesh> &p_mesh);
 	Ref<Mesh> get_draw_pass_mesh(int p_pass) const;
 
-	virtual String get_configuration_warning() const;
+	virtual String get_configuration_warning() const override;
+
+	void set_sub_emitter(const NodePath &p_path);
+	NodePath get_sub_emitter() const;
 
 	void restart();
+
+	enum EmitFlags {
+		EMIT_FLAG_POSITION = RS::PARTICLES_EMIT_FLAG_POSITION,
+		EMIT_FLAG_ROTATION_SCALE = RS::PARTICLES_EMIT_FLAG_ROTATION_SCALE,
+		EMIT_FLAG_VELOCITY = RS::PARTICLES_EMIT_FLAG_VELOCITY,
+		EMIT_FLAG_COLOR = RS::PARTICLES_EMIT_FLAG_COLOR,
+		EMIT_FLAG_CUSTOM = RS::PARTICLES_EMIT_FLAG_CUSTOM
+	};
+
+	void emit_particle(const Transform &p_transform, const Vector3 &p_velocity, const Color &p_color, const Color &p_custom, uint32_t p_emit_flags);
 
 	AABB capture_aabb() const;
 	GPUParticles3D();
@@ -129,5 +145,6 @@ public:
 };
 
 VARIANT_ENUM_CAST(GPUParticles3D::DrawOrder)
+VARIANT_ENUM_CAST(GPUParticles3D::EmitFlags)
 
 #endif // PARTICLES_H

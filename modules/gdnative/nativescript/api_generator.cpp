@@ -139,7 +139,7 @@ static String get_type_name(const PropertyInfo &info) {
 }
 
 /*
- * Some comparison helper functions we need 
+ * Some comparison helper functions we need
  */
 
 struct MethodInfoComparator {
@@ -176,10 +176,10 @@ List<ClassAPI> generate_c_api_classes() {
 	// Register global constants as a fake GlobalConstants singleton class
 	{
 		ClassAPI global_constants_api;
-		global_constants_api.class_name = L"GlobalConstants";
+		global_constants_api.class_name = "GlobalConstants";
 		global_constants_api.api_type = ClassDB::API_CORE;
 		global_constants_api.is_singleton = true;
-		global_constants_api.singleton_name = L"GlobalConstants";
+		global_constants_api.singleton_name = "GlobalConstants";
 		global_constants_api.is_instanciable = false;
 		const int constants_count = GlobalConstants::get_global_constant_count();
 		for (int i = 0; i < constants_count; ++i) {
@@ -214,7 +214,7 @@ List<ClassAPI> generate_c_api_classes() {
 		{
 			List<StringName> inheriters;
 			ClassDB::get_inheriters_from_class("Reference", &inheriters);
-			bool is_reference = !!inheriters.find(class_name);
+			bool is_reference = !!inheriters.find(class_name) || class_name == "Reference";
 			// @Unclear
 			class_api.is_reference = !class_api.is_singleton && is_reference;
 		}
@@ -452,6 +452,7 @@ static List<String> generate_c_api_json(const List<ClassAPI> &p_api) {
 				source.push_back("\t\t\t\t\t{\n");
 				source.push_back("\t\t\t\t\t\t\"name\": \"" + e->get().argument_names[i] + "\",\n");
 				source.push_back("\t\t\t\t\t\t\"type\": \"" + e->get().argument_types[i] + "\",\n");
+				source.push_back(String("\t\t\t\t\t\t\"has_default_value\": ") + (e->get().default_arguments.has(i) ? "true" : "false") + ",\n");
 				source.push_back("\t\t\t\t\t\t\"default_value\": \"" + (e->get().default_arguments.has(i) ? (String)e->get().default_arguments[i] : "") + "\"\n");
 				source.push_back(String("\t\t\t\t\t}") + ((i < e->get().argument_names.size() - 1) ? "," : "") + "\n");
 			}

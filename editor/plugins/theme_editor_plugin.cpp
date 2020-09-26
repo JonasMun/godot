@@ -206,8 +206,8 @@ void ThemeEditor::_save_template_cbk(String fname) {
 	file->store_line("; [value] examples:");
 	file->store_line("; ");
 	file->store_line("; Type.item = 6 ; numeric constant. ");
-	file->store_line("; Type.item = #FF00FF ; HTML color ");
-	file->store_line("; Type.item = #55FF00FF ; HTML color with alpha 55.");
+	file->store_line("; Type.item = #FF00FF ; HTML color (magenta).");
+	file->store_line("; Type.item = #FF00FF55 ; HTML color (magenta with alpha 0x55).");
 	file->store_line("; Type.item = icon(image.png) ; icon in a png file (relative to theme file).");
 	file->store_line("; Type.item = font(font.xres) ; font in a resource (relative to theme file).");
 	file->store_line("; Type.item = sbox(stylebox.xres) ; stylebox in a resource (relative to theme file).");
@@ -629,7 +629,7 @@ ThemeEditor::ThemeEditor() {
 	ScrollContainer *scroll = memnew(ScrollContainer);
 	add_child(scroll);
 	scroll->set_enable_v_scroll(true);
-	scroll->set_enable_h_scroll(false);
+	scroll->set_enable_h_scroll(true);
 	scroll->set_v_size_flags(SIZE_EXPAND_FILL);
 
 	MarginContainer *root_container = memnew(MarginContainer);
@@ -828,7 +828,7 @@ ThemeEditor::ThemeEditor() {
 	type_hbc->add_child(type_edit);
 	type_menu = memnew(MenuButton);
 	type_menu->set_flat(false);
-	type_menu->set_text("..");
+	type_menu->set_text("...");
 	type_hbc->add_child(type_menu);
 
 	type_menu->get_popup()->connect("id_pressed", callable_mp(this, &ThemeEditor::_type_menu_cbk));
@@ -846,7 +846,7 @@ ThemeEditor::ThemeEditor() {
 	name_hbc->add_child(name_edit);
 	name_menu = memnew(MenuButton);
 	type_menu->set_flat(false);
-	name_menu->set_text("..");
+	name_menu->set_text("...");
 	name_hbc->add_child(name_menu);
 
 	name_menu->get_popup()->connect("about_to_popup", callable_mp(this, &ThemeEditor::_name_menu_about_to_show));

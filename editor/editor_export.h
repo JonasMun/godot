@@ -55,7 +55,6 @@ public:
 	enum ScriptExportMode {
 		MODE_SCRIPT_TEXT,
 		MODE_SCRIPT_COMPILED,
-		MODE_SCRIPT_ENCRYPTED,
 	};
 
 private:
@@ -80,6 +79,11 @@ private:
 	String name;
 
 	String custom_features;
+
+	String enc_in_filters;
+	String enc_ex_filters;
+	bool enc_pck = false;
+	bool enc_directory = false;
 
 	int script_mode = MODE_SCRIPT_COMPILED;
 	String script_key;
@@ -129,6 +133,18 @@ public:
 	void set_export_path(const String &p_path);
 	String get_export_path() const;
 
+	void set_enc_in_filter(const String &p_filter);
+	String get_enc_in_filter() const;
+
+	void set_enc_ex_filter(const String &p_filter);
+	String get_enc_ex_filter() const;
+
+	void set_enc_pck(bool p_enabled);
+	bool get_enc_pck() const;
+
+	void set_enc_directory(bool p_enabled);
+	bool get_enc_directory() const;
+
 	void set_script_export_mode(int p_mode);
 	int get_script_export_mode() const;
 
@@ -156,13 +172,14 @@ class EditorExportPlatform : public Reference {
 	GDCLASS(EditorExportPlatform, Reference);
 
 public:
-	typedef Error (*EditorExportSaveFunction)(void *p_userdata, const String &p_path, const Vector<uint8_t> &p_data, int p_file, int p_total);
+	typedef Error (*EditorExportSaveFunction)(void *p_userdata, const String &p_path, const Vector<uint8_t> &p_data, int p_file, int p_total, const Vector<String> &p_enc_in_filters, const Vector<String> &p_enc_ex_filters, const Vector<uint8_t> &p_key);
 	typedef Error (*EditorExportSaveSharedObject)(void *p_userdata, const SharedObject &p_so);
 
 private:
 	struct SavedData {
 		uint64_t ofs;
 		uint64_t size;
+		bool encrypted;
 		Vector<uint8_t> md5;
 		CharString path_utf8;
 
@@ -192,8 +209,8 @@ private:
 	void _export_find_dependencies(const String &p_path, Set<String> &p_paths);
 
 	void gen_debug_flags(Vector<String> &r_flags, int p_flags);
-	static Error _save_pack_file(void *p_userdata, const String &p_path, const Vector<uint8_t> &p_data, int p_file, int p_total);
-	static Error _save_zip_file(void *p_userdata, const String &p_path, const Vector<uint8_t> &p_data, int p_file, int p_total);
+	static Error _save_pack_file(void *p_userdata, const String &p_path, const Vector<uint8_t> &p_data, int p_file, int p_total, const Vector<String> &p_enc_in_filters, const Vector<String> &p_enc_ex_filters, const Vector<uint8_t> &p_key);
+	static Error _save_zip_file(void *p_userdata, const String &p_path, const Vector<uint8_t> &p_data, int p_file, int p_total, const Vector<String> &p_enc_in_filters, const Vector<String> &p_enc_ex_filters, const Vector<uint8_t> &p_key);
 
 	void _edit_files_with_filter(DirAccess *da, const Vector<String> &p_filters, Set<String> &r_list, bool exclude);
 	void _edit_filter_list(Set<String> &r_list, const String &p_filter, bool exclude);
@@ -290,6 +307,7 @@ class EditorExportPlugin : public Reference {
 	bool skipped;
 
 	Vector<String> ios_frameworks;
+	Vector<String> ios_embedded_frameworks;
 	Vector<String> ios_project_static_libs;
 	String ios_plist_content;
 	String ios_linker_flags;
@@ -304,6 +322,7 @@ class EditorExportPlugin : public Reference {
 
 	_FORCE_INLINE_ void _export_end() {
 		ios_frameworks.clear();
+		ios_embedded_frameworks.clear();
 		ios_bundle_files.clear();
 		ios_plist_content = "";
 		ios_linker_flags = "";
@@ -322,6 +341,7 @@ protected:
 	void add_shared_object(const String &p_path, const Vector<String> &tags);
 
 	void add_ios_framework(const String &p_path);
+	void add_ios_embedded_framework(const String &p_path);
 	void add_ios_project_static_lib(const String &p_path);
 	void add_ios_plist_content(const String &p_plist_content);
 	void add_ios_linker_flags(const String &p_flags);
@@ -337,6 +357,7 @@ protected:
 
 public:
 	Vector<String> get_ios_frameworks() const;
+	Vector<String> get_ios_embedded_frameworks() const;
 	Vector<String> get_ios_project_static_libs() const;
 	String get_ios_plist_content() const;
 	String get_ios_linker_flags() const;
@@ -417,17 +438,17 @@ private:
 	FixUpEmbeddedPckFunc fixup_embedded_pck_func;
 
 public:
-	virtual void get_preset_features(const Ref<EditorExportPreset> &p_preset, List<String> *r_features);
+	virtual void get_preset_features(const Ref<EditorExportPreset> &p_preset, List<String> *r_features) override;
 
-	virtual void get_export_options(List<ExportOption> *r_options);
+	virtual void get_export_options(List<ExportOption> *r_options) override;
 
-	virtual String get_name() const;
-	virtual String get_os_name() const;
-	virtual Ref<Texture2D> get_logo() const;
+	virtual String get_name() const override;
+	virtual String get_os_name() const override;
+	virtual Ref<Texture2D> get_logo() const override;
 
-	virtual bool can_export(const Ref<EditorExportPreset> &p_preset, String &r_error, bool &r_missing_templates) const;
-	virtual List<String> get_binary_extensions(const Ref<EditorExportPreset> &p_preset) const;
-	virtual Error export_project(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path, int p_flags = 0);
+	virtual bool can_export(const Ref<EditorExportPreset> &p_preset, String &r_error, bool &r_missing_templates) const override;
+	virtual List<String> get_binary_extensions(const Ref<EditorExportPreset> &p_preset) const override;
+	virtual Error export_project(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path, int p_flags = 0) override;
 	virtual Error sign_shared_object(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path);
 
 	void set_extension(const String &p_extension, const String &p_feature_key = "default");
@@ -442,8 +463,8 @@ public:
 	void set_debug_32(const String &p_file);
 
 	void add_platform_feature(const String &p_feature);
-	virtual void get_platform_features(List<String> *r_features);
-	virtual void resolve_platform_feature_priorities(const Ref<EditorExportPreset> &p_preset, Set<String> &p_features);
+	virtual void get_platform_features(List<String> *r_features) override;
+	virtual void resolve_platform_feature_priorities(const Ref<EditorExportPreset> &p_preset, Set<String> &p_features) override;
 
 	int get_chmod_flags() const;
 	void set_chmod_flags(int p_flags);
@@ -458,7 +479,7 @@ class EditorExportTextSceneToBinaryPlugin : public EditorExportPlugin {
 	GDCLASS(EditorExportTextSceneToBinaryPlugin, EditorExportPlugin);
 
 public:
-	virtual void _export_file(const String &p_path, const String &p_type, const Set<String> &p_features);
+	virtual void _export_file(const String &p_path, const String &p_type, const Set<String> &p_features) override;
 	EditorExportTextSceneToBinaryPlugin();
 };
 

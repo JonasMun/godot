@@ -44,7 +44,8 @@
 	if (unlikely(m_exc != nullptr)) {                  \
 		GDMonoUtils::debug_unhandled_exception(m_exc); \
 		GD_UNREACHABLE();                              \
-	}
+	} else                                             \
+		((void)0)
 
 namespace GDMonoUtils {
 
@@ -84,10 +85,6 @@ void detach_current_thread(MonoThread *p_mono_thread);
 MonoThread *get_current_thread();
 bool is_thread_attached();
 
-_FORCE_INLINE_ bool is_main_thread() {
-	return mono_domain_get() != nullptr && mono_thread_get_main() == mono_thread_current();
-}
-
 uint32_t new_strong_gchandle(MonoObject *p_object);
 uint32_t new_strong_gchandle_pinned(MonoObject *p_object);
 uint32_t new_weak_gchandle(MonoObject *p_object);
@@ -115,7 +112,6 @@ String get_type_desc(MonoType *p_type);
 String get_type_desc(MonoReflectionType *p_reftype);
 
 String get_exception_name_and_message(MonoException *p_exc);
-void set_exception_message(MonoException *p_exc, String message);
 
 void debug_print_unhandled_exception(MonoException *p_exc);
 void debug_send_unhandled_exception_error(MonoException *p_exc);
@@ -167,20 +163,24 @@ StringName get_native_godot_class_name(GDMonoClass *p_class);
 
 #define GD_MONO_BEGIN_RUNTIME_INVOKE                                              \
 	int &_runtime_invoke_count_ref = GDMonoUtils::get_runtime_invoke_count_ref(); \
-	_runtime_invoke_count_ref += 1;
+	_runtime_invoke_count_ref += 1;                                               \
+	((void)0)
 
-#define GD_MONO_END_RUNTIME_INVOKE \
-	_runtime_invoke_count_ref -= 1;
+#define GD_MONO_END_RUNTIME_INVOKE  \
+	_runtime_invoke_count_ref -= 1; \
+	((void)0)
 
 #define GD_MONO_SCOPE_THREAD_ATTACH                                   \
 	GDMonoUtils::ScopeThreadAttach __gdmono__scope__thread__attach__; \
-	(void)__gdmono__scope__thread__attach__;
+	(void)__gdmono__scope__thread__attach__;                          \
+	((void)0)
 
 #ifdef DEBUG_ENABLED
-#define GD_MONO_ASSERT_THREAD_ATTACHED \
-	{ CRASH_COND(!GDMonoUtils::is_thread_attached()); }
+#define GD_MONO_ASSERT_THREAD_ATTACHED              \
+	CRASH_COND(!GDMonoUtils::is_thread_attached()); \
+	((void)0)
 #else
-#define GD_MONO_ASSERT_THREAD_ATTACHED
+#define GD_MONO_ASSERT_THREAD_ATTACHED ((void)0)
 #endif
 
 #endif // GD_MONOUTILS_H
