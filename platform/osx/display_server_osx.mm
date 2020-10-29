@@ -63,6 +63,8 @@
 
 #define DS_OSX ((DisplayServerOSX *)(DisplayServerOSX::get_singleton()))
 
+static bool ignore_momentum_scroll = false;
+
 static void _get_key_modifier_state(unsigned int p_osx_state, Ref<InputEventWithModifiers> r_state) {
 	r_state->set_shift((p_osx_state & NSEventModifierFlagShift));
 	r_state->set_control((p_osx_state & NSEventModifierFlagControl));
@@ -1304,6 +1306,8 @@ static int remapKey(unsigned int key, unsigned int state) {
 	ERR_FAIL_COND(!DS_OSX->windows.has(window_id));
 	DisplayServerOSX::WindowData &wd = DS_OSX->windows[window_id];
 
+	ignore_momentum_scroll = true;
+
 	// Ignore all input if IME input is in progress
 	if (!imeInputEventInProgress) {
 		NSString *characters = [event characters];
@@ -1348,6 +1352,8 @@ static int remapKey(unsigned int key, unsigned int state) {
 }
 
 - (void)flagsChanged:(NSEvent *)event {
+	ignore_momentum_scroll = true;
+
 	// Ignore all input if IME input is in progress
 	if (!imeInputEventInProgress) {
 		DisplayServerOSX::KeyEvent ke;
@@ -1505,6 +1511,14 @@ inline void sendPanEvent(DisplayServer::WindowID window_id, double dx, double dy
 	if ([event hasPreciseScrollingDeltas]) {
 		deltaX *= 0.03;
 		deltaY *= 0.03;
+	}
+
+	if ([event momentumPhase] != NSEventPhaseNone) {
+		if (ignore_momentum_scroll) {
+			return;
+		}
+	} else {
+		ignore_momentum_scroll = false;
 	}
 
 	if ([event phase] != NSEventPhaseNone || [event momentumPhase] != NSEventPhaseNone) {
@@ -2041,6 +2055,12 @@ void DisplayServerOSX::mouse_set_mode(MouseMode p_mode) {
 			CGDisplayHideCursor(kCGDirectMainDisplay);
 		}
 		CGAssociateMouseAndMouseCursorPosition(false);
+		WindowData &wd = windows[MAIN_WINDOW_ID];
+		const NSRect contentRect = [wd.window_view frame];
+		NSRect pointInWindowRect = NSMakeRect(contentRect.size.width / 2, contentRect.size.height / 2, 0, 0);
+		NSPoint pointOnScreen = [[wd.window_view window] convertRectToScreen:pointInWindowRect].origin;
+		CGPoint lMouseWarpPos = { pointOnScreen.x, CGDisplayBounds(CGMainDisplayID()).size.height - pointOnScreen.y };
+		CGWarpMouseCursorPosition(lMouseWarpPos);
 	} else if (p_mode == MOUSE_MODE_HIDDEN) {
 		if (mouse_mode == MOUSE_MODE_VISIBLE || mouse_mode == MOUSE_MODE_CONFINED) {
 			CGDisplayHideCursor(kCGDirectMainDisplay);
@@ -2240,11 +2260,18 @@ int DisplayServerOSX::screen_get_dpi(int p_screen) const {
 	NSArray *screenArray = [NSScreen screens];
 	if ((NSUInteger)p_screen < [screenArray count]) {
 		NSDictionary *description = [[screenArray objectAtIndex:p_screen] deviceDescription];
-		NSSize displayDPI = [[description objectForKey:NSDeviceResolution] sizeValue];
-		return (displayDPI.width + displayDPI.height) / 2;
+
+		const NSSize displayPixelSize = [[description objectForKey:NSDeviceSize] sizeValue];
+		const CGSize displayPhysicalSize = CGDisplayScreenSize([[description objectForKey:@"NSScreenNumber"] unsignedIntValue]);
+		float scale = [[screenArray objectAtIndex:p_screen] backingScaleFactor];
+
+		float den2 = (displayPhysicalSize.width / 25.4f) * (displayPhysicalSize.width / 25.4f) + (displayPhysicalSize.height / 25.4f) * (displayPhysicalSize.height / 25.4f);
+		if (den2 > 0.0f) {
+			return ceil(sqrt(displayPixelSize.width * displayPixelSize.width + displayPixelSize.height * displayPixelSize.height) / sqrt(den2) * scale);
+		}
 	}
 
-	return 96;
+	return 72;
 }
 
 float DisplayServerOSX::screen_get_scale(int p_screen) const {

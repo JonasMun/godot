@@ -48,7 +48,7 @@ Size2 EditorProperty::get_minimum_size() const {
 		if (!c) {
 			continue;
 		}
-		if (c->is_set_as_toplevel()) {
+		if (c->is_set_as_top_level()) {
 			continue;
 		}
 		if (!c->is_visible()) {
@@ -117,7 +117,7 @@ void EditorProperty::_notification(int p_what) {
 				if (!c) {
 					continue;
 				}
-				if (c->is_set_as_toplevel()) {
+				if (c->is_set_as_top_level()) {
 					continue;
 				}
 				if (c == bottom_editor) {
@@ -179,7 +179,7 @@ void EditorProperty::_notification(int p_what) {
 			if (!c) {
 				continue;
 			}
-			if (c->is_set_as_toplevel()) {
+			if (c->is_set_as_top_level()) {
 				continue;
 			}
 			if (c == bottom_editor) {
@@ -358,16 +358,16 @@ bool EditorPropertyRevert::may_node_be_in_instance(Node *p_node) {
 	Node *node = p_node;
 
 	while (node) {
-		if (node->get_scene_instance_state().is_valid()) {
-			might_be = true;
-			break;
-		}
 		if (node == edited_scene) {
 			if (node->get_scene_inherited_state().is_valid()) {
 				might_be = true;
 				break;
 			}
 			might_be = false;
+			break;
+		}
+		if (node->get_scene_instance_state().is_valid()) {
+			might_be = true;
 			break;
 		}
 		node = node->get_owner();
@@ -414,9 +414,9 @@ bool EditorPropertyRevert::get_instanced_node_original_property(Node *p_node, co
 		node = node->get_owner();
 	}
 
-	if (!found && node) {
+	if (!found && p_node) {
 		//if not found, try default class value
-		Variant attempt = ClassDB::class_get_default_property_value(node->get_class_name(), p_prop);
+		Variant attempt = ClassDB::class_get_default_property_value(p_node->get_class_name(), p_prop);
 		if (attempt.get_type() != Variant::NIL) {
 			found = true;
 			value = attempt;
@@ -1133,7 +1133,7 @@ void EditorInspectorSection::_notification(int p_what) {
 			if (!c) {
 				continue;
 			}
-			if (c->is_set_as_toplevel()) {
+			if (c->is_set_as_top_level()) {
 				continue;
 			}
 			if (!c->is_visible_in_tree()) {
@@ -1225,7 +1225,7 @@ Size2 EditorInspectorSection::get_minimum_size() const {
 		if (!c) {
 			continue;
 		}
-		if (c->is_set_as_toplevel()) {
+		if (c->is_set_as_top_level()) {
 			continue;
 		}
 		if (!c->is_visible()) {

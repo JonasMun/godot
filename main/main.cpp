@@ -334,7 +334,10 @@ void Main::print_help(const char *p_binary) {
 	OS::get_singleton()->print("  -d, --debug                      Debug (local stdout debugger).\n");
 	OS::get_singleton()->print("  -b, --breakpoints                Breakpoint list as source::line comma-separated pairs, no spaces (use %%20 instead).\n");
 	OS::get_singleton()->print("  --profiling                      Enable profiling in the script debugger.\n");
+#if DEBUG_ENABLED
+	OS::get_singleton()->print("  --vk-layers                      Enable Vulkan Validation layers for debugging.\n");
 	OS::get_singleton()->print("  --gpu-abort                      Abort on GPU errors (usually validation layer errors), may help see the problem if your system freezes.\n");
+#endif
 	OS::get_singleton()->print("  --remote-debug <uri>             Remote debug (<protocol>://<host/IP>[:<port>], e.g. tcp://127.0.0.1:6007).\n");
 #if defined(DEBUG_ENABLED) && !defined(SERVER_ENABLED)
 	OS::get_singleton()->print("  --debug-collisions               Show collision shapes when running the scene.\n");
@@ -695,9 +698,12 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 		} else if (I->get() == "-w" || I->get() == "--windowed") { // force windowed window
 
 			init_windowed = true;
-		} else if (I->get() == "--gpu-abort") { // force windowed window
-
+#ifdef DEBUG_ENABLED
+		} else if (I->get() == "--vk-layers") {
+			Engine::singleton->use_validation_layers = true;
+		} else if (I->get() == "--gpu-abort") {
 			Engine::singleton->abort_on_gpu_errors = true;
+#endif
 		} else if (I->get() == "--tablet-driver") {
 			if (I->next()) {
 				tablet_driver = I->next()->get();
@@ -1369,6 +1375,7 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 					"0,33200,1,or_greater")); // No negative numbers
 
 	GLOBAL_DEF("display/window/ios/hide_home_indicator", true);
+	GLOBAL_DEF("input_devices/pointing/ios/touch_delay", 0.150);
 
 	Engine::get_singleton()->set_frame_delay(frame_delay);
 
@@ -1569,7 +1576,6 @@ Error Main::setup2(Thread::ID p_main_tid_override) {
 
 		Color boot_bg_color = GLOBAL_DEF("application/boot_splash/bg_color", boot_splash_bg_color);
 		if (boot_logo.is_valid()) {
-			OS::get_singleton()->_msec_splash = OS::get_singleton()->get_ticks_msec();
 			RenderingServer::get_singleton()->set_boot_image(boot_logo, boot_bg_color, boot_logo_scale,
 					boot_logo_filter);
 

@@ -89,7 +89,7 @@ public:
 	String get_selected_path() const;
 	String get_current_path() const;
 
-	void inspect_object(Object *p_obj, const String &p_for_property = String());
+	void inspect_object(Object *p_obj, const String &p_for_property = String(), bool p_inspector_only = false);
 
 	EditorSelection *get_selection();
 	//EditorImportExport *get_import_export();
@@ -221,7 +221,7 @@ public:
 
 	int update_overlays() const;
 
-	void queue_save_layout() const;
+	void queue_save_layout();
 
 	void make_bottom_panel_item_visible(Control *p_item);
 	void hide_bottom_panel();

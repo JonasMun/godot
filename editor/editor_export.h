@@ -68,8 +68,6 @@ private:
 	Set<String> selected_files;
 	bool runnable = false;
 
-	Vector<String> patches;
-
 	friend class EditorExport;
 	friend class EditorExportPlatform;
 
@@ -120,12 +118,6 @@ public:
 
 	void set_exclude_filter(const String &p_exclude);
 	String get_exclude_filter() const;
-
-	void add_patch(const String &p_path, int p_at_pos = -1);
-	void set_patch(int p_index, const String &p_path);
-	String get_patch(int p_index);
-	void remove_patch(int p_idx);
-	Vector<String> get_patches() const;
 
 	void set_custom_features(const String &p_custom_features);
 	String get_custom_features() const;
@@ -277,6 +269,7 @@ public:
 	virtual Ref<Texture2D> get_run_icon() const { return get_logo(); }
 
 	String test_etc2() const; //generic test for etc2 since most platforms use it
+	String test_etc2_or_pvrtc() const; // test for etc2 or pvrtc support for iOS
 	virtual bool can_export(const Ref<EditorExportPreset> &p_preset, String &r_error, bool &r_missing_templates) const = 0;
 
 	virtual List<String> get_binary_extensions(const Ref<EditorExportPreset> &p_preset) const = 0;

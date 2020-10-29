@@ -119,6 +119,11 @@ bool EditorFileSystemDirectory::get_file_import_is_valid(int p_idx) const {
 	return files[p_idx]->import_valid;
 }
 
+uint64_t EditorFileSystemDirectory::get_file_modified_time(int p_idx) const {
+	ERR_FAIL_INDEX_V(p_idx, files.size(), 0);
+	return files[p_idx]->modified_time;
+}
+
 String EditorFileSystemDirectory::get_file_script_class_name(int p_idx) const {
 	return files[p_idx]->script_class_name;
 }
@@ -1865,13 +1870,14 @@ void EditorFileSystem::_find_group_files(EditorFileSystemDirectory *efd, Map<Str
 }
 
 void EditorFileSystem::reimport_files(const Vector<String> &p_files) {
-	{ //check that .import folder exists
+	{
+		// Ensure that ProjectSettings::IMPORTED_FILES_PATH exists.
 		DirAccess *da = DirAccess::open("res://");
-		if (da->change_dir(".import") != OK) {
-			Error err = da->make_dir(".import");
-			if (err) {
+		if (da->change_dir(ProjectSettings::IMPORTED_FILES_PATH) != OK) {
+			Error err = da->make_dir_recursive(ProjectSettings::IMPORTED_FILES_PATH);
+			if (err || da->change_dir(ProjectSettings::IMPORTED_FILES_PATH) != OK) {
 				memdelete(da);
-				ERR_FAIL_MSG("Failed to create 'res://.import' folder.");
+				ERR_FAIL_MSG("Failed to create '" + ProjectSettings::IMPORTED_FILES_PATH + "' folder.");
 			}
 		}
 		memdelete(da);
@@ -2055,8 +2061,8 @@ EditorFileSystem::EditorFileSystem() {
 	scanning_changes_done = false;
 
 	DirAccess *da = DirAccess::create(DirAccess::ACCESS_RESOURCES);
-	if (da->change_dir("res://.import") != OK) {
-		da->make_dir("res://.import");
+	if (da->change_dir(ProjectSettings::IMPORTED_FILES_PATH) != OK) {
+		da->make_dir(ProjectSettings::IMPORTED_FILES_PATH);
 	}
 	// This should probably also work on Unix and use the string it returns for FAT32 or exFAT
 	using_fat32_or_exfat = (da->get_filesystem_type() == "FAT32" || da->get_filesystem_type() == "exFAT");

@@ -31,8 +31,7 @@
 #ifndef EDITOR_SETTINGS_H
 #define EDITOR_SETTINGS_H
 
-#include "core/object.h"
-
+#include "core/class_db.h"
 #include "core/io/config_file.h"
 #include "core/os/thread_safe.h"
 #include "core/resource.h"
@@ -44,7 +43,6 @@ class EditorPlugin;
 class EditorSettings : public Resource {
 	GDCLASS(EditorSettings, Resource);
 
-private:
 	_THREAD_SAFE_CLASS_
 
 public:

@@ -38,6 +38,7 @@
 #include "scene/2d/audio_stream_player_2d.h"
 #include "scene/2d/back_buffer_copy.h"
 #include "scene/2d/camera_2d.h"
+#include "scene/2d/canvas_group.h"
 #include "scene/2d/canvas_modulate.h"
 #include "scene/2d/collision_polygon_2d.h"
 #include "scene/2d/collision_shape_2d.h"
@@ -194,6 +195,7 @@
 #include "scene/3d/decal.h"
 #include "scene/3d/gi_probe.h"
 #include "scene/3d/gpu_particles_3d.h"
+#include "scene/3d/gpu_particles_collision_3d.h"
 #include "scene/3d/immediate_geometry_3d.h"
 #include "scene/3d/light_3d.h"
 #include "scene/3d/lightmap_probe.h"
@@ -450,6 +452,15 @@ void register_scene_types() {
 	ClassDB::register_class<LightmapProbe>();
 	ClassDB::register_virtual_class<Lightmapper>();
 	ClassDB::register_class<GPUParticles3D>();
+	ClassDB::register_virtual_class<GPUParticlesCollision3D>();
+	ClassDB::register_class<GPUParticlesCollisionBox>();
+	ClassDB::register_class<GPUParticlesCollisionSphere>();
+	ClassDB::register_class<GPUParticlesCollisionSDF>();
+	ClassDB::register_class<GPUParticlesCollisionHeightField>();
+	ClassDB::register_virtual_class<GPUParticlesAttractor3D>();
+	ClassDB::register_class<GPUParticlesAttractorBox>();
+	ClassDB::register_class<GPUParticlesAttractorSphere>();
+	ClassDB::register_class<GPUParticlesAttractorVectorField>();
 	ClassDB::register_class<CPUParticles3D>();
 	ClassDB::register_class<Position3D>();
 
@@ -512,7 +523,8 @@ void register_scene_types() {
 	ClassDB::register_class<VisualShaderNodeCustom>();
 	ClassDB::register_class<VisualShaderNodeInput>();
 	ClassDB::register_virtual_class<VisualShaderNodeOutput>();
-	ClassDB::register_class<VisualShaderNodeGroupBase>();
+	ClassDB::register_virtual_class<VisualShaderNodeResizableBase>();
+	ClassDB::register_virtual_class<VisualShaderNodeGroupBase>();
 	ClassDB::register_class<VisualShaderNodeFloatConstant>();
 	ClassDB::register_class<VisualShaderNodeIntConstant>();
 	ClassDB::register_class<VisualShaderNodeBooleanConstant>();
@@ -553,6 +565,7 @@ void register_scene_types() {
 	ClassDB::register_class<VisualShaderNodeVectorDecompose>();
 	ClassDB::register_class<VisualShaderNodeTransformDecompose>();
 	ClassDB::register_class<VisualShaderNodeTexture>();
+	ClassDB::register_class<VisualShaderNodeCurveTexture>();
 	ClassDB::register_virtual_class<VisualShaderNodeSample3D>();
 	ClassDB::register_class<VisualShaderNodeTexture2DArray>();
 	ClassDB::register_class<VisualShaderNodeTexture3D>();
@@ -582,6 +595,7 @@ void register_scene_types() {
 
 	ClassDB::register_class<ShaderMaterial>();
 	ClassDB::register_virtual_class<CanvasItem>();
+	ClassDB::register_class<CanvasTexture>();
 	ClassDB::register_class<CanvasItemMaterial>();
 	SceneTree::add_idle_callback(CanvasItemMaterial::flush_changes);
 	CanvasItemMaterial::init_shaders();
@@ -589,6 +603,7 @@ void register_scene_types() {
 	/* REGISTER 2D */
 
 	ClassDB::register_class<Node2D>();
+	ClassDB::register_class<CanvasGroup>();
 	ClassDB::register_class<CPUParticles2D>();
 	ClassDB::register_class<GPUParticles2D>();
 	ClassDB::register_class<Sprite2D>();

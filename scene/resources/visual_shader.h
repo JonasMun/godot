@@ -193,8 +193,7 @@ class VisualShaderNode : public Resource {
 
 	Map<int, Variant> default_input_values;
 	Map<int, bool> connected_input_ports;
-	Map<int, bool> connected_output_ports;
-	int connected_output_count = 0;
+	Map<int, int> connected_output_ports;
 
 protected:
 	bool simple_decl = true;
@@ -487,14 +486,33 @@ public:
 	VisualShaderNodeUniformRef();
 };
 
-class VisualShaderNodeGroupBase : public VisualShaderNode {
-	GDCLASS(VisualShaderNodeGroupBase, VisualShaderNode);
+class VisualShaderNodeResizableBase : public VisualShaderNode {
+	GDCLASS(VisualShaderNodeResizableBase, VisualShaderNode);
+
+protected:
+	Vector2 size = Size2(0, 0);
+	bool allow_v_resize = true;
+
+protected:
+	static void _bind_methods();
+
+public:
+	void set_size(const Vector2 &p_size);
+	Vector2 get_size() const;
+
+	bool is_allow_v_resize() const;
+	void set_allow_v_resize(bool p_enabled);
+
+	VisualShaderNodeResizableBase();
+};
+
+class VisualShaderNodeGroupBase : public VisualShaderNodeResizableBase {
+	GDCLASS(VisualShaderNodeGroupBase, VisualShaderNodeResizableBase);
 
 private:
 	void _apply_port_changes();
 
 protected:
-	Vector2 size = Size2(0, 0);
 	String inputs = "";
 	String outputs = "";
 	bool editable = false;
@@ -512,11 +530,6 @@ protected:
 	static void _bind_methods();
 
 public:
-	virtual String get_caption() const override;
-
-	void set_size(const Vector2 &p_size);
-	Vector2 get_size() const;
-
 	void set_inputs(const String &p_inputs);
 	String get_inputs() const;
 

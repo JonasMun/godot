@@ -185,35 +185,6 @@ bool EditorExportPreset::has_export_file(const String &p_path) {
 	return selected_files.has(p_path);
 }
 
-void EditorExportPreset::add_patch(const String &p_path, int p_at_pos) {
-	if (p_at_pos < 0) {
-		patches.push_back(p_path);
-	} else {
-		patches.insert(p_at_pos, p_path);
-	}
-	EditorExport::singleton->save_presets();
-}
-
-void EditorExportPreset::remove_patch(int p_idx) {
-	patches.remove(p_idx);
-	EditorExport::singleton->save_presets();
-}
-
-void EditorExportPreset::set_patch(int p_index, const String &p_path) {
-	ERR_FAIL_INDEX(p_index, patches.size());
-	patches.write[p_index] = p_path;
-	EditorExport::singleton->save_presets();
-}
-
-String EditorExportPreset::get_patch(int p_index) {
-	ERR_FAIL_INDEX_V(p_index, patches.size(), String());
-	return patches[p_index];
-}
-
-Vector<String> EditorExportPreset::get_patches() const {
-	return patches;
-}
-
 void EditorExportPreset::set_custom_features(const String &p_custom_features) {
 	custom_features = p_custom_features;
 	EditorExport::singleton->save_presets();
@@ -1341,7 +1312,6 @@ void EditorExport::_save() {
 		config->set_value(section, "include_filter", preset->get_include_filter());
 		config->set_value(section, "exclude_filter", preset->get_exclude_filter());
 		config->set_value(section, "export_path", preset->get_export_path());
-		config->set_value(section, "patch_list", preset->get_patches());
 		config->set_value(section, "encryption_include_filters", preset->get_enc_in_filter());
 		config->set_value(section, "encryption_exclude_filters", preset->get_enc_ex_filter());
 		config->set_value(section, "encrypt_pck", preset->get_enc_pck());
@@ -1402,6 +1372,20 @@ String EditorExportPlatform::test_etc2() const {
 	} else if (driver == "Vulkan" && !etc2_supported) {
 		// FIXME: Review if this is true for Vulkan.
 		return TTR("Target platform requires 'ETC2' texture compression for Vulkan. Enable 'Import Etc 2' in Project Settings.");
+	}
+	return String();
+}
+
+String EditorExportPlatform::test_etc2_or_pvrtc() const {
+	String driver = ProjectSettings::get_singleton()->get("rendering/quality/driver/driver_name");
+	bool etc2_supported = ProjectSettings::get_singleton()->get("rendering/vram_compression/import_etc2");
+	bool pvrtc_supported = ProjectSettings::get_singleton()->get("rendering/vram_compression/import_pvrtc");
+
+	if (driver == "GLES2" && !pvrtc_supported) {
+		return TTR("Target platform requires 'PVRTC' texture compression for GLES2. Enable 'Import Pvrtc' in Project Settings.");
+	} else if (driver == "Vulkan" && !etc2_supported && !pvrtc_supported) {
+		// FIXME: Review if this is true for Vulkan.
+		return TTR("Target platform requires 'ETC2' or 'PVRTC' texture compression for Vulkan. Enable 'Import Etc 2' or 'Import Pvrtc' in Project Settings.");
 	}
 	return String();
 }
@@ -1514,12 +1498,6 @@ void EditorExport::load_config() {
 		preset->set_include_filter(config->get_value(section, "include_filter"));
 		preset->set_exclude_filter(config->get_value(section, "exclude_filter"));
 		preset->set_export_path(config->get_value(section, "export_path", ""));
-
-		Vector<String> patch_list = config->get_value(section, "patch_list");
-
-		for (int i = 0; i < patch_list.size(); i++) {
-			preset->add_patch(patch_list[i]);
-		}
 
 		if (config->has_section_key(section, "encrypt_pck")) {
 			preset->set_enc_pck(config->get_value(section, "encrypt_pck"));
