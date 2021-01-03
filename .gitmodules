@@ -1,0 +1,3 @@
+[submodule "modules/grid_formation_godot_module"]
+	path = modules/grid_formation_godot_module
+	url = https://gitlab.com/Jonas-Mun/grid_formation_godot_module.git
